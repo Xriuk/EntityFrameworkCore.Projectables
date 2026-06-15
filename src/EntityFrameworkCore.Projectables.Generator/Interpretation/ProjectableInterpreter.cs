@@ -75,26 +75,26 @@ static internal partial class ProjectableInterpreter
         {
             // Projectable method
             (_, MethodDeclarationSyntax methodDecl) =>
-                TryApplyMethodBody(methodDecl, allowBlockBody, memberSymbol,
-                    expressionSyntaxRewriter, declarationSyntaxRewriter, context, descriptor),
+                TryApplyMethodBody(member, methodDecl, semanticModel, allowBlockBody, memberSymbol,
+                    expressionSyntaxRewriter, declarationSyntaxRewriter, context, compilation, descriptor),
 
             // Projectable method whose body is an Expression<TDelegate> property
             (MethodDeclarationSyntax originalMethodDecl, PropertyDeclarationSyntax exprPropDecl) =>
                 TryApplyExpressionPropertyBody(originalMethodDecl, exprPropDecl,
                     semanticModel, member, memberSymbol,
-                    expressionSyntaxRewriter, declarationSyntaxRewriter, context, descriptor),
+                    expressionSyntaxRewriter, declarationSyntaxRewriter, context, compilation, descriptor),
 
             // Projectable property whose body is an Expression<TDelegate> property
             (PropertyDeclarationSyntax originalPropertyDecl, PropertyDeclarationSyntax exprPropDecl)
                 when IsExpressionDelegatePropertyDecl(exprPropDecl, semanticModel) =>
                 TryApplyExpressionPropertyBodyForProperty(originalPropertyDecl, exprPropDecl,
                     semanticModel, member, memberSymbol,
-                    expressionSyntaxRewriter, declarationSyntaxRewriter, context, descriptor),
+                    expressionSyntaxRewriter, declarationSyntaxRewriter, context, compilation, descriptor),
 
             // Projectable property
             (_, PropertyDeclarationSyntax propDecl) =>
-                TryApplyPropertyBody(propDecl, allowBlockBody, memberSymbol,
-                    expressionSyntaxRewriter, declarationSyntaxRewriter, context, descriptor),
+                TryApplyPropertyBody(member, propDecl, semanticModel, allowBlockBody, memberSymbol,
+                    expressionSyntaxRewriter, declarationSyntaxRewriter, context, compilation, descriptor),
 
             // Projectable constructor
             (_, ConstructorDeclarationSyntax ctorDecl) =>

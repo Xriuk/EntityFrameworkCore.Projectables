@@ -14,16 +14,22 @@ static internal partial class ProjectableInterpreter
     /// Returns <c>false</c> and reports diagnostics on failure.
     /// </summary>
     private static bool TryApplyMethodBody(
+        MemberDeclarationSyntax originalMemberDeclarationSyntax,
         MethodDeclarationSyntax methodDeclarationSyntax,
+        SemanticModel semanticModel,
         bool allowBlockBody,
         ISymbol memberSymbol,
         ExpressionSyntaxRewriter expressionSyntaxRewriter,
         DeclarationSyntaxRewriter declarationSyntaxRewriter,
         SourceProductionContext context,
+        Compilation? compilation,
         ProjectableDescriptor descriptor)
     {
         ExpressionSyntax? bodyExpression = null;
         var isExpressionBodied = false;
+
+        var derivedTypes = GetDerivedTypes(semanticModel.GetDeclaredSymbol(originalMemberDeclarationSyntax), compilation, semanticModel);
+        var isHierarchy = derivedTypes?.Count > 0;
 
         if (methodDeclarationSyntax.ExpressionBody is not null)
         {
@@ -48,7 +54,7 @@ static internal partial class ProjectableInterpreter
                 return false; // diagnostics already reported by BlockStatementConverter
             }
         }
-        else
+        else if (!isHierarchy)
         {
             return ReportRequiresBodyAndFail(context, methodDeclarationSyntax, memberSymbol.Name);
         }
@@ -57,7 +63,7 @@ static internal partial class ProjectableInterpreter
         descriptor.ReturnTypeName = returnType.ToString();
 
         // Only rewrite expression-bodied methods; block-bodied methods are already rewritten
-        descriptor.ExpressionBody = isExpressionBodied
+        descriptor.ExpressionBody = isExpressionBodied && bodyExpression != null
             ? (ExpressionSyntax)expressionSyntaxRewriter.Visit(bodyExpression)
             : bodyExpression;
 
@@ -71,6 +77,12 @@ static internal partial class ProjectableInterpreter
         if (descriptor.TypeParameterList is null)
         {
             ApplyExtensionBlockTypeParameters(memberSymbol, descriptor);
+        }
+
+        // If we are rewriting a hierarchy method we need to invoke the derived types' overrides
+        if(isHierarchy)
+        {
+            descriptor.ExpressionBody = new HierarchyMembersConverter().DuplicateMethodExpression(derivedTypes!, descriptor);
         }
 
         return true;
@@ -92,14 +104,18 @@ static internal partial class ProjectableInterpreter
         ExpressionSyntaxRewriter expressionSyntaxRewriter,
         DeclarationSyntaxRewriter declarationSyntaxRewriter,
         SourceProductionContext context,
+        Compilation? compilation,
         ProjectableDescriptor descriptor)
     {
+        var derivedTypes = GetDerivedTypes(semanticModel.GetDeclaredSymbol(originalMethodDecl), compilation, semanticModel);
+        var isHierarchy = derivedTypes?.Count > 0;
+
         var rawExpr = TryGetPropertyGetterExpression(exprPropDecl);
         var (innerBody, lambdaParamNames) = rawExpr is not null
             ? TryExtractLambdaBodyAndParams(rawExpr, semanticModel, member.SyntaxTree)
             : (null, []);
 
-        if (innerBody is null)
+        if (innerBody is null && !isHierarchy)
         {
             return ReportRequiresBodyAndFail(context, exprPropDecl, memberSymbol.Name);
         }
@@ -112,77 +128,80 @@ static internal partial class ProjectableInterpreter
         // For cross-tree expression properties the rewriter's SemanticModel cannot resolve
         // nodes from the other file — skip rewriting in that case (simple lambda bodies need
         // no rewrites; advanced features like null-conditional rewriting are unsupported cross-file).
-        var visitedBody = exprPropDecl.SyntaxTree == member.SyntaxTree
+        var visitedBody = exprPropDecl.SyntaxTree == member.SyntaxTree && innerBody != null
             ? (ExpressionSyntax)expressionSyntaxRewriter.Visit(innerBody)
             : innerBody;
 
-        // For instance methods and C#14 extension members, BuildBaseDescriptor adds an
-        // implicit @this receiver parameter.  If the expression property lambda uses a
-        // different parameter name (e.g. c => c.Value > 0), rename it so the generated
-        // code references @this instead of an undefined identifier.
+        if (visitedBody != null)
+        {
+            // For instance methods and C#14 extension members, BuildBaseDescriptor adds an
+            // implicit @this receiver parameter.  If the expression property lambda uses a
+            // different parameter name (e.g. c => c.Value > 0), rename it so the generated
+            // code references @this instead of an undefined identifier.
 #if ROSLYN_5_0_OR_LATER
-        var isExtensionMember = memberSymbol.ContainingType is { IsExtension: true };
+            var isExtensionMember = memberSymbol.ContainingType is { IsExtension: true };
 #else
-        var isExtensionMember = false;
+            var isExtensionMember = false;
 #endif
-        var hasImplicitReceiver = isExtensionMember
-            || !originalMethodDecl.Modifiers.Any(SyntaxKind.StaticKeyword);
+            var hasImplicitReceiver = isExtensionMember
+                || !originalMethodDecl.Modifiers.Any(SyntaxKind.StaticKeyword);
 
-        // Collect (lambdaParamName → methodParamName) rename pairs to apply in a
-        // single multi-variable pass, avoiding cascading renames when names overlap.
-        var renames = new List<(string From, string To)>();
+            // Collect (lambdaParamName → methodParamName) rename pairs to apply in a
+            // single multi-variable pass, avoiding cascading renames when names overlap.
+            var renames = new List<(string From, string To)>();
 
-        var lambdaOffset = 0;
-        if (hasImplicitReceiver)
-        {
-            if (lambdaParamNames.Count > 0 && lambdaParamNames[0] != "@this")
+            var lambdaOffset = 0;
+            if (hasImplicitReceiver)
             {
-                renames.Add((lambdaParamNames[0], "@this"));
+                if (lambdaParamNames.Count > 0 && lambdaParamNames[0] != "@this")
+                {
+                    renames.Add((lambdaParamNames[0], "@this"));
+                }
+
+                lambdaOffset = 1;
             }
 
-            lambdaOffset = 1;
-        }
-
-        // Rename each explicit method parameter from its lambda counterpart name.
-        var methodParams = originalMethodDecl.ParameterList.Parameters;
-        for (var i = 0; i < methodParams.Count; i++)
-        {
-            var lambdaIdx = lambdaOffset + i;
-            if (lambdaIdx >= lambdaParamNames.Count)
+            // Rename each explicit method parameter from its lambda counterpart name.
+            var methodParams = originalMethodDecl.ParameterList.Parameters;
+            for (var i = 0; i < methodParams.Count; i++)
             {
-                break;
+                var lambdaIdx = lambdaOffset + i;
+                if (lambdaIdx >= lambdaParamNames.Count)
+                {
+                    break;
+                }
+
+                var lambdaName = lambdaParamNames[lambdaIdx];
+                var methodName = methodParams[i].Identifier.ValueText;
+                if (lambdaName != methodName)
+                {
+                    renames.Add((lambdaName, methodName));
+                }
             }
 
-            var lambdaName = lambdaParamNames[lambdaIdx];
-            var methodName = methodParams[i].Identifier.ValueText;
-            if (lambdaName != methodName)
+            // Apply all renames. To avoid cascading substitutions when names overlap
+            // (e.g. swapped parameter names), use a unique sentinel prefix for each
+            // intermediate name, then replace sentinels with the final names.
+            if (renames.Count > 0)
             {
-                renames.Add((lambdaName, methodName));
-            }
-        }
+                // Phase 1: rename each source name to a collision-free sentinel.
+                var sentinels = new List<(string Sentinel, string To)>(renames.Count);
+                for (var i = 0; i < renames.Count; i++)
+                {
+                    var sentinel = $"__rename_sentinel_{i}__";
+                    visitedBody = (ExpressionSyntax)new VariableReplacementRewriter(
+                        renames[i].From,
+                        SyntaxFactory.IdentifierName(sentinel)).Visit(visitedBody);
+                    sentinels.Add((sentinel, renames[i].To));
+                }
 
-        // Apply all renames. To avoid cascading substitutions when names overlap
-        // (e.g. swapped parameter names), use a unique sentinel prefix for each
-        // intermediate name, then replace sentinels with the final names.
-        if (renames.Count > 0)
-        {
-            // Phase 1: rename each source name to a collision-free sentinel.
-            var sentinels = new List<(string Sentinel, string To)>(renames.Count);
-            for (var i = 0; i < renames.Count; i++)
-            {
-                var sentinel = $"__rename_sentinel_{i}__";
-                visitedBody = (ExpressionSyntax)new VariableReplacementRewriter(
-                    renames[i].From,
-                    SyntaxFactory.IdentifierName(sentinel)).Visit(visitedBody);
-                sentinels.Add((sentinel, renames[i].To));
-            }
-
-            // Phase 2: replace each sentinel with the final target name.
-            foreach (var (sentinel, to) in sentinels)
-            {
-                visitedBody = (ExpressionSyntax)new VariableReplacementRewriter(
-                    sentinel,
-                    SyntaxFactory.IdentifierName(to)).Visit(visitedBody);
+                // Phase 2: replace each sentinel with the final target name.
+                foreach (var (sentinel, to) in sentinels)
+                {
+                    visitedBody = (ExpressionSyntax)new VariableReplacementRewriter(
+                        sentinel,
+                        SyntaxFactory.IdentifierName(to)).Visit(visitedBody);
+                }
             }
         }
 
@@ -190,6 +209,12 @@ static internal partial class ProjectableInterpreter
 
         ApplyParameterList(originalMethodDecl.ParameterList, declarationSyntaxRewriter, descriptor);
         ApplyTypeParameters(originalMethodDecl, declarationSyntaxRewriter, descriptor);
+
+        // If we are rewriting a hierarchy method we need to invoke the derived types' overrides
+        if (isHierarchy)
+        {
+            descriptor.ExpressionBody = new HierarchyMembersConverter().DuplicateMethodExpression(derivedTypes!, descriptor);
+        }
 
         return true;
     }
@@ -211,14 +236,18 @@ static internal partial class ProjectableInterpreter
         ExpressionSyntaxRewriter expressionSyntaxRewriter,
         DeclarationSyntaxRewriter declarationSyntaxRewriter,
         SourceProductionContext context,
+        Compilation? compilation,
         ProjectableDescriptor descriptor)
     {
+        var derivedTypes = GetDerivedTypes(semanticModel.GetDeclaredSymbol(originalPropertyDecl), compilation, semanticModel);
+        var isHierarchy = derivedTypes?.Count > 0;
+
         var rawExpr = TryGetPropertyGetterExpression(exprPropDecl);
         var (innerBody, firstParamName) = rawExpr is not null
             ? TryExtractLambdaBodyAndFirstParam(rawExpr, semanticModel, member.SyntaxTree)
             : (null, null);
 
-        if (innerBody is null)
+        if (innerBody is null && !isHierarchy)
         {
             return ReportRequiresBodyAndFail(context, exprPropDecl, memberSymbol.Name);
         }
@@ -229,10 +258,10 @@ static internal partial class ProjectableInterpreter
         // uses the semantic model which requires the original (pre-rename) syntax nodes.
         // For cross-tree expression properties the rewriter's SemanticModel cannot resolve
         // nodes from the other file — skip rewriting in that case.
-        var visitedBody = exprPropDecl.SyntaxTree == member.SyntaxTree
+        var visitedBody = exprPropDecl.SyntaxTree == member.SyntaxTree && innerBody != null
             ? (ExpressionSyntax)expressionSyntaxRewriter.Visit(innerBody)
             : innerBody;
-        if (firstParamName is not null && firstParamName != "@this")
+        if (visitedBody != null && firstParamName != null && firstParamName != "@this")
         {
             visitedBody = (ExpressionSyntax)new VariableReplacementRewriter(
                 firstParamName,
@@ -243,6 +272,12 @@ static internal partial class ProjectableInterpreter
         descriptor.ReturnTypeName = returnType.ToString();
         descriptor.ExpressionBody = visitedBody;
 
+        // If we are rewriting a hierarchy method we need to invoke the derived types' overrides
+        if (isHierarchy)
+        {
+            descriptor.ExpressionBody = new HierarchyMembersConverter().DuplicatePropertyExpression(derivedTypes!, descriptor);
+        }
+
         return true;
     }
 
@@ -251,14 +286,20 @@ static internal partial class ProjectableInterpreter
     /// Returns <c>false</c> and reports diagnostics on failure.
     /// </summary>
     private static bool TryApplyPropertyBody(
+        MemberDeclarationSyntax originalMemberDeclarationSyntax,
         PropertyDeclarationSyntax propertyDeclarationSyntax,
+        SemanticModel semanticModel,
         bool allowBlockBody,
         ISymbol memberSymbol,
         ExpressionSyntaxRewriter expressionSyntaxRewriter,
         DeclarationSyntaxRewriter declarationSyntaxRewriter,
         SourceProductionContext context,
+        Compilation? compilation,
         ProjectableDescriptor descriptor)
     {
+        var derivedTypes = GetDerivedTypes(semanticModel.GetDeclaredSymbol(originalMemberDeclarationSyntax), compilation, semanticModel);
+        var isHierarchy = derivedTypes?.Count > 0;
+
         ExpressionSyntax? bodyExpression = null;
         var isBlockBodiedGetter = false;
 
@@ -299,7 +340,7 @@ static internal partial class ProjectableInterpreter
             }
         }
 
-        if (bodyExpression is null)
+        if (bodyExpression is null && !isHierarchy)
         {
             return ReportRequiresBodyAndFail(context, propertyDeclarationSyntax, memberSymbol.Name);
         }
@@ -308,9 +349,15 @@ static internal partial class ProjectableInterpreter
         descriptor.ReturnTypeName = returnType.ToString();
 
         // Only rewrite expression-bodied properties; block-bodied getters are already rewritten
-        descriptor.ExpressionBody = isBlockBodiedGetter
+        descriptor.ExpressionBody = isBlockBodiedGetter || bodyExpression == null
             ? bodyExpression
             : (ExpressionSyntax)expressionSyntaxRewriter.Visit(bodyExpression);
+
+        // If we are rewriting a hierarchy method we need to invoke the derived types' overrides
+        if (isHierarchy)
+        {
+            descriptor.ExpressionBody = new HierarchyMembersConverter().DuplicatePropertyExpression(derivedTypes!, descriptor);
+        }
 
         return true;
     }

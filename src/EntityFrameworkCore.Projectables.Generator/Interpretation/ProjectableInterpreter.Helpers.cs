@@ -183,5 +183,99 @@ static internal partial class ProjectableInterpreter
             memberName));
         return false;
     }
+
+    private static IEnumerable<INamedTypeSymbol> GetAllTypes(INamespaceSymbol namespaceSymbol)
+    {
+        foreach (var type in namespaceSymbol.GetTypeMembers())
+        {
+            yield return type;
+        }
+
+        foreach (var nestedNamespace in namespaceSymbol.GetNamespaceMembers())
+        {
+            foreach (var type in GetAllTypes(nestedNamespace))
+            {
+                yield return type;
+            }
+        }
+    }
+
+    private static IList<INamedTypeSymbol> GetDerivedTypes(ISymbol? symbol, Compilation? compilation, SemanticModel semanticModel)
+    {
+        if (symbol != null && compilation != null && (symbol.IsAbstract || symbol.IsVirtual || symbol.IsOverride))
+        {
+            var types = GetAllTypes(compilation.GlobalNamespace)
+                .Where(t => IsDerivedFrom(t, symbol.ContainingType) &&
+                    t.DeclaringSyntaxReferences.Any(s => ((ClassDeclarationSyntax)s.GetSyntax()).Members.Any(m => {
+                        var ss = semanticModel.GetDeclaredSymbol(m);
+                    return (ss != null && ss.IsOverride && ss.Kind == symbol.Kind && ss.Name == symbol.Name);
+                })))
+                .OrderByDescending(GetDepth) // More specific types first
+                .ThenBy(t => t.Name)
+                .ToList();
+
+            // Remove types which are derived from another type in the list which has the declared symbol
+            // with the Projectable attribute (generation will be delegated to them)
+            var typesToRemove = types.Where(t => types.Any(tt => IsDerivedFrom(t, tt) &&
+                tt.DeclaringSyntaxReferences.Any(s => ((ClassDeclarationSyntax)s.GetSyntax()).Members.First(m => {
+                    var ss = semanticModel.GetDeclaredSymbol(m);
+                    return (ss != null && ss.IsOverride && ss.Kind == symbol.Kind && ss.Name == symbol.Name);
+                }).AttributeLists.Any(a => a.Attributes.Any(aa => {
+                    var attributeSymbol = semanticModel.GetSymbolInfo(aa).Symbol;
+
+                    INamedTypeSymbol attributeTypeSymbol;
+                    if (attributeSymbol is IMethodSymbol methodSymbol)
+                    {
+                        attributeTypeSymbol = methodSymbol.ContainingType;
+                    }
+                    else
+                    {
+                        attributeTypeSymbol = ((INamedTypeSymbol)attributeSymbol!);
+                    }
+
+                    return attributeTypeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == "global::EntityFrameworkCore.Projectables.ProjectableAttribute";
+                }))))).ToList();
+
+            foreach(var type in typesToRemove)
+            {
+                types.Remove(type);
+            }
+
+            return types;
+        }
+        else
+        {
+            return Array.Empty<INamedTypeSymbol>();
+        }
+    }
+
+    private static bool IsDerivedFrom(INamedTypeSymbol candidate, INamedTypeSymbol baseClass)
+    {
+        var current = candidate.BaseType;
+
+        while (current != null)
+        {
+            // SymbolEqualityComparer ensures we compare symbols accurately across compilation boundaries
+            if (SymbolEqualityComparer.Default.Equals(current, baseClass))
+            {
+                return true;
+            }
+            current = current.BaseType;
+        }
+
+        return false;
+    }
+
+    private static int GetDepth(INamedTypeSymbol type)
+    {
+        var depth = 0;
+        while(type.BaseType != null)
+        {
+            depth++;
+            type = type.BaseType;
+        }
+
+        return depth;
+    }
 }
 

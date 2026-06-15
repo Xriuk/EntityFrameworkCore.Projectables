@@ -911,4 +911,155 @@ namespace Foo {
 
         return Verifier.Verify(result.GeneratedTrees[0].ToString());
     }
+
+    [Fact]
+    public Task BlockBodiedMethod_Hierarchy()
+    {
+        var compilation = CreateCompilation(@"
+using System;
+using System.Linq;
+using System.Collections.Generic;
+using EntityFrameworkCore.Projectables;
+
+namespace Foo {
+    public class Foo {
+        [Projectable(AllowBlockBody = true)]
+        public virtual int Id(){
+            return 1;
+        }
+    }
+
+    public class Bar : Foo {
+        override public int Id(){
+            return 2;
+        }
+    }
+}
+");
+
+        var result = RunGenerator(compilation);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Single(result.GeneratedTrees);
+
+        return Verifier.Verify(result.GeneratedTrees[0].ToString());
+    }
+
+    [Fact]
+    public Task BlockBodiedMethod_HierarchyMultiple()
+    {
+        var compilation = CreateCompilation(@"
+using System;
+using System.Linq;
+using System.Collections.Generic;
+using EntityFrameworkCore.Projectables;
+
+namespace Foo {
+    public class Foo {
+        [Projectable(AllowBlockBody = true)]
+        public virtual int Id(){
+            return 1;
+        }
+    }
+
+    public class Bar : Foo {
+        override public int Id(){
+            return 2;
+        }
+    }
+
+    public class Baz : Foo {
+        override public int Id(){
+            return 3;
+        }
+    }
+}
+");
+
+        var result = RunGenerator(compilation);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Single(result.GeneratedTrees);
+
+        return Verifier.Verify(result.GeneratedTrees[0].ToString());
+    }
+
+    [Fact]
+    public Task BlockBodiedMethod_HierarchyNotNestedWithAttribute()
+    {
+        var compilation = CreateCompilation(@"
+using System;
+using System.Linq;
+using System.Collections.Generic;
+using EntityFrameworkCore.Projectables;
+
+namespace Foo {
+    public class Foo {
+        [Projectable(AllowBlockBody = true)]
+        public virtual int Id(){
+            return 1;
+        }
+    }
+
+    public class Bar : Foo {
+        [Projectable(AllowBlockBody = true)]
+        override public int Id(){
+            return 2;
+        }
+    }
+
+    public class Baz : Bar {
+        override public int Id(){
+            return 3;
+        }
+    }
+}
+");
+
+        var result = RunGenerator(compilation);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(2, result.GeneratedTrees.Length);
+
+        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
+    }
+
+    [Fact]
+    public Task BlockBodiedMethod_HierarchyNestedWithoutAttribute()
+    {
+        var compilation = CreateCompilation(@"
+using System;
+using System.Linq;
+using System.Collections.Generic;
+using EntityFrameworkCore.Projectables;
+
+namespace Foo {
+    public class Foo {
+        [Projectable(AllowBlockBody = true)]
+        public virtual int Id(){
+            return 1;
+        }
+    }
+
+    public class Bar : Foo {
+        override public int Id(){
+            return 2;
+        }
+    }
+
+    public class Baz : Bar {
+        override public int Id(){
+            return 3;
+        }
+    }
+}
+");
+
+        var result = RunGenerator(compilation);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Single(result.GeneratedTrees);
+
+        return Verifier.Verify(result.GeneratedTrees[0].ToString());
+    }
 }

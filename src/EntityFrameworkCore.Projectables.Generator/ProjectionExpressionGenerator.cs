@@ -7,7 +7,6 @@ using System.Collections.Immutable;
 using System.Text;
 using EntityFrameworkCore.Projectables.CodeFixes;
 using EntityFrameworkCore.Projectables.Generator.Comparers;
-using EntityFrameworkCore.Projectables.Generator.Infrastructure;
 using EntityFrameworkCore.Projectables.Generator.Interpretation;
 using EntityFrameworkCore.Projectables.Generator.Models;
 using EntityFrameworkCore.Projectables.Generator.Registry;

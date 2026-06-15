@@ -46,8 +46,8 @@ static internal class Diagnostics
 
     public readonly static DiagnosticDescriptor RequiresBodyDefinition = new DiagnosticDescriptor(
         id: "EFP0006",
-        title: "Method or property should expose a body definition",
-        messageFormat: "Method or property '{0}' should expose a body definition (e.g. an expression-bodied member or a block-bodied method) to be used as the source for the generated expression tree.",
+        title: "Method or property should expose a body definition if not overwritten in classes derived from the declaring class",
+        messageFormat: "Method or property '{0}' should expose a body definition (e.g. an expression-bodied member or a block-bodied method) to be used as the source for the generated expression tree if not overwritten in at least one class derived from the class where the method or property is declared.",
         category: "Design",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
