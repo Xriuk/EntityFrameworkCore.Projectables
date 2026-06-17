@@ -89,14 +89,7 @@ public class ProjectionExpressionGenerator : IIncrementalGenerator
                     return;
                 }
 
-                /*try
-                {*/
-                    Execute(member, semanticModel, memberSymbol, attribute, globalOptions, compilation, spc);
-                /*}
-                catch(Exception e)
-                {
-                    throw new Exception(e.StackTrace.Replace("\r\n", "<br/>").Replace("\n", "<br/>"));
-                }*/
+                Execute(member, semanticModel, memberSymbol, attribute, globalOptions, compilation, spc);
             });
 
         // Build the projection registry: collect all entries and emit a single registry file
