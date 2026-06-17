@@ -200,16 +200,16 @@ static internal partial class ProjectableInterpreter
         }
     }
 
-    private static IList<INamedTypeSymbol> GetDerivedTypes(ISymbol? symbol, Compilation? compilation, SemanticModel semanticModel)
+    private static IList<INamedTypeSymbol> GetDerivedTypes(ISymbol? symbol, Compilation? compilation)
     {
         if (symbol != null && compilation != null && (symbol.IsAbstract || symbol.IsVirtual || symbol.IsOverride))
         {
             var types = GetAllTypes(compilation.GlobalNamespace)
                 .Where(t => IsDerivedFrom(t, symbol.ContainingType) &&
                     t.DeclaringSyntaxReferences.Any(s => ((ClassDeclarationSyntax)s.GetSyntax()).Members.Any(m => {
-                        var ss = semanticModel.GetDeclaredSymbol(m);
-                    return (ss != null && ss.IsOverride && ss.Kind == symbol.Kind && ss.Name == symbol.Name);
-                })))
+                        var ss = compilation.GetSemanticModel(m.SyntaxTree).GetDeclaredSymbol(m);
+                        return (ss != null && ss.IsOverride && ss.Kind == symbol.Kind && ss.Name == symbol.Name);
+                    })))
                 .OrderByDescending(GetDepth) // More specific types first
                 .ThenBy(t => t.Name)
                 .ToList();
@@ -218,10 +218,10 @@ static internal partial class ProjectableInterpreter
             // with the Projectable attribute (generation will be delegated to them)
             var typesToRemove = types.Where(t => types.Any(tt => IsDerivedFrom(t, tt) &&
                 tt.DeclaringSyntaxReferences.Any(s => ((ClassDeclarationSyntax)s.GetSyntax()).Members.First(m => {
-                    var ss = semanticModel.GetDeclaredSymbol(m);
+                    var ss = compilation.GetSemanticModel(m.SyntaxTree).GetDeclaredSymbol(m);
                     return (ss != null && ss.IsOverride && ss.Kind == symbol.Kind && ss.Name == symbol.Name);
                 }).AttributeLists.Any(a => a.Attributes.Any(aa => {
-                    var attributeSymbol = semanticModel.GetSymbolInfo(aa).Symbol;
+                    var attributeSymbol = compilation.GetSemanticModel(aa.SyntaxTree).GetSymbolInfo(aa).Symbol;
 
                     INamedTypeSymbol attributeTypeSymbol;
                     if (attributeSymbol is IMethodSymbol methodSymbol)
@@ -233,7 +233,8 @@ static internal partial class ProjectableInterpreter
                         attributeTypeSymbol = ((INamedTypeSymbol)attributeSymbol!);
                     }
 
-                    return attributeTypeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == "global::EntityFrameworkCore.Projectables.ProjectableAttribute";
+                    return attributeTypeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ==
+                        "global::EntityFrameworkCore.Projectables.ProjectableAttribute";
                 }))))).ToList();
 
             foreach(var type in typesToRemove)

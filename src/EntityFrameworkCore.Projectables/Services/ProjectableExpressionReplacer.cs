@@ -13,8 +13,10 @@ namespace EntityFrameworkCore.Projectables.Services
     public sealed class ProjectableExpressionReplacer : ExpressionVisitor
     {
         private readonly IProjectionExpressionResolver _resolver;
+        private readonly IProjectionExpressionBaseResolver _resolverBase;
         private readonly ExpressionArgumentReplacer _expressionArgumentReplacer = new();
         private readonly Dictionary<MemberInfo, LambdaExpression?> _projectableMemberCache = new();
+        private readonly Dictionary<MemberInfo, LambdaExpression?> _projectableBaseMemberCache = new();
         private readonly HashSet<ConstructorInfo> _expandingConstructors = new();
         private IQueryProvider? _currentQueryProvider;
         private bool _disableRootRewrite = false;
@@ -38,15 +40,38 @@ namespace EntityFrameworkCore.Projectables.Services
         private readonly static ConditionalWeakTable<Type, MethodInfo> _closedSelectCache = new();
         private readonly static ConditionalWeakTable<Type, MethodInfo> _closedWhereCache = new();
 
-        public ProjectableExpressionReplacer(IProjectionExpressionResolver projectionExpressionResolver, bool trackByDefault = false)
+        public ProjectableExpressionReplacer(IProjectionExpressionResolver projectionExpressionResolver, bool trackByDefault = false):
+            this(projectionExpressionResolver, null!, trackByDefault) { }
+        public ProjectableExpressionReplacer(
+            IProjectionExpressionResolver projectionExpressionResolver,
+            IProjectionExpressionBaseResolver projectionExpressionBaseResolver,
+            bool trackByDefault = false)
         {
             _trackingByDefault = trackByDefault;
             _resolver = projectionExpressionResolver;
+            _resolverBase = projectionExpressionBaseResolver;
         }
 
         bool TryGetReflectedExpression(MemberInfo memberInfo, [NotNullWhen(true)] out LambdaExpression? reflectedExpression)
         {
-            if (!_projectableMemberCache.TryGetValue(memberInfo, out reflectedExpression))
+            return TryGetReflectedExpression(memberInfo, false, out reflectedExpression);
+        }
+        bool TryGetReflectedExpression(MemberInfo memberInfo, bool isBase, [NotNullWhen(true)] out LambdaExpression? reflectedExpression)
+        {
+            if (isBase)
+            {
+                if (!_projectableBaseMemberCache.TryGetValue(memberInfo, out reflectedExpression))
+                {
+                    var projectableAttribute = memberInfo.GetCustomAttribute<ProjectableAttribute>(false);
+
+                    reflectedExpression = projectableAttribute is not null
+                        ? _resolverBase?.FindGeneratedBaseExpression(memberInfo, projectableAttribute)
+                        : null;
+
+                    _projectableBaseMemberCache.Add(memberInfo, reflectedExpression);
+                }
+            }
+            else if (!_projectableMemberCache.TryGetValue(memberInfo, out reflectedExpression))
             {
                 var projectableAttribute = memberInfo.GetCustomAttribute<ProjectableAttribute>(false);
 
@@ -185,7 +210,12 @@ namespace EntityFrameworkCore.Projectables.Services
                 _disableRootRewrite = false;
             }
 
-            if (TryGetReflectedExpression(methodInfo, out var reflectedExpression))
+            // Check if we are rewriting a base invocation ((BaseType)@this).MyMethod(...) or ((BaseBaseType)(BaseType)@this).MyMethod(...)
+            // We are only checking for a type cast from a type to its immediate parent,
+            // unwrapping nested casts, because the original parameter might have been replaced
+            var isBase = (node.Object is UnaryExpression u && UnwrapUnaryConvert(u) != u);
+
+            if (TryGetReflectedExpression(methodInfo, isBase, out var reflectedExpression))
             {
                 for (var parameterIndex = 0; parameterIndex < reflectedExpression.Parameters.Count; parameterIndex++)
                 {
@@ -198,6 +228,19 @@ namespace EntityFrameworkCore.Projectables.Services
 
                     if (mappedArgumentExpression is not null)
                     {
+                        // If the type is different in case of a base call we re-cast it
+                        if(isBase && mappedArgumentExpression.Type != parameterExpression.Type &&
+                            mappedArgumentExpression.Type.IsAssignableTo(parameterExpression.Type) &&
+                            mappedArgumentExpression is UnaryExpression u2)
+                        {
+                            var unwrapped = UnwrapUnaryConvert(u2);
+                            if (unwrapped != u2)
+                            {
+                                mappedArgumentExpression = Expression.Convert(unwrapped, parameterExpression.Type);
+                            }
+                        }
+
+
                         _expressionArgumentReplacer.ParameterArgumentMapping.Add(parameterExpression, mappedArgumentExpression);
                     }
                 }
@@ -211,6 +254,17 @@ namespace EntityFrameworkCore.Projectables.Services
             }
 
             return base.VisitMethodCall(node);
+        }
+
+        private Expression UnwrapUnaryConvert(UnaryExpression node)
+        {
+            if (node.NodeType != ExpressionType.Convert || node.Type != node.Operand.Type.BaseType)
+                return node;
+
+            if (node.Operand is UnaryExpression u)
+                return UnwrapUnaryConvert(u);
+            else
+                return node.Operand;
         }
 
         protected override Expression VisitNew(NewExpression node)
@@ -300,7 +354,11 @@ namespace EntityFrameworkCore.Projectables.Services
                 _ => node.Member
             };
 
-            if (TryGetReflectedExpression(nodeMember, out var reflectedExpression))
+            // Check if we are rewriting a base property ((BaseType)@this).MyProp
+            var isBase = (node.Expression is UnaryExpression u && u.NodeType == ExpressionType.Convert &&
+                u.Type == u.Operand.Type.BaseType && u.Operand is ParameterExpression p && p.Name == "@this");
+
+            if (TryGetReflectedExpression(nodeMember, isBase, out var reflectedExpression))
             {
                 if (nodeExpression is not null)
                 {

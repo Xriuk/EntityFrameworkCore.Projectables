@@ -116,12 +116,22 @@ internal partial class ExpressionSyntaxRewriter : CSharpSyntaxRewriter
 
     public override SyntaxNode? VisitBaseExpression(BaseExpressionSyntax node)
     {
-        // Swap out the use of this to @this
-        return VisitThisBaseExpression(node);
+        // Swap out the use of this to @this and cast it to the base type
+        return SyntaxFactory.ParenthesizedExpression(
+            SyntaxFactory.CastExpression(
+                SyntaxFactory.ParseTypeName(_semanticModel.GetTypeInfo(node).Type!.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)),
+                SyntaxFactory.IdentifierName("@this")))
+            .WithLeadingTrivia(node.GetLeadingTrivia())
+            .WithTrailingTrivia(node.GetTrailingTrivia());
     }
 
     public override SyntaxNode? VisitIdentifierName(IdentifierNameSyntax node)
     {
+        if (node.Identifier.Text == "@this")
+        {
+            return node;
+        }
+
         // Handle C# 14 extension parameter replacement (e.g., `e` in `extension(Entity e)` becomes `@this`)
 #if ROSLYN_5_0_OR_LATER
         if (_extensionParameterName is not null && node.Identifier.Text == _extensionParameterName)

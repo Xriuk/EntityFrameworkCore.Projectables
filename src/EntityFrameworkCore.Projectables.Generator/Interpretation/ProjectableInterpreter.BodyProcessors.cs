@@ -28,7 +28,7 @@ static internal partial class ProjectableInterpreter
         ExpressionSyntax? bodyExpression = null;
         var isExpressionBodied = false;
 
-        var derivedTypes = GetDerivedTypes(semanticModel.GetDeclaredSymbol(originalMemberDeclarationSyntax), compilation, semanticModel);
+        var derivedTypes = GetDerivedTypes(semanticModel.GetDeclaredSymbol(originalMemberDeclarationSyntax), compilation);
         var isHierarchy = derivedTypes?.Count > 0;
 
         if (methodDeclarationSyntax.ExpressionBody is not null)
@@ -82,6 +82,7 @@ static internal partial class ProjectableInterpreter
         // If we are rewriting a hierarchy method we need to invoke the derived types' overrides
         if(isHierarchy)
         {
+            descriptor.HierarchyOriginalExpressionBody = descriptor.ExpressionBody;
             descriptor.ExpressionBody = new HierarchyMembersConverter().DuplicateMethodExpression(derivedTypes!, descriptor);
         }
 
@@ -107,7 +108,7 @@ static internal partial class ProjectableInterpreter
         Compilation? compilation,
         ProjectableDescriptor descriptor)
     {
-        var derivedTypes = GetDerivedTypes(semanticModel.GetDeclaredSymbol(originalMethodDecl), compilation, semanticModel);
+        var derivedTypes = GetDerivedTypes(semanticModel.GetDeclaredSymbol(originalMethodDecl), compilation);
         var isHierarchy = derivedTypes?.Count > 0;
 
         var rawExpr = TryGetPropertyGetterExpression(exprPropDecl);
@@ -213,6 +214,7 @@ static internal partial class ProjectableInterpreter
         // If we are rewriting a hierarchy method we need to invoke the derived types' overrides
         if (isHierarchy)
         {
+            descriptor.HierarchyOriginalExpressionBody = descriptor.ExpressionBody;
             descriptor.ExpressionBody = new HierarchyMembersConverter().DuplicateMethodExpression(derivedTypes!, descriptor);
         }
 
@@ -239,7 +241,7 @@ static internal partial class ProjectableInterpreter
         Compilation? compilation,
         ProjectableDescriptor descriptor)
     {
-        var derivedTypes = GetDerivedTypes(semanticModel.GetDeclaredSymbol(originalPropertyDecl), compilation, semanticModel);
+        var derivedTypes = GetDerivedTypes(semanticModel.GetDeclaredSymbol(originalPropertyDecl), compilation);
         var isHierarchy = derivedTypes?.Count > 0;
 
         var rawExpr = TryGetPropertyGetterExpression(exprPropDecl);
@@ -275,6 +277,7 @@ static internal partial class ProjectableInterpreter
         // If we are rewriting a hierarchy method we need to invoke the derived types' overrides
         if (isHierarchy)
         {
+            descriptor.HierarchyOriginalExpressionBody = descriptor.ExpressionBody;
             descriptor.ExpressionBody = new HierarchyMembersConverter().DuplicatePropertyExpression(derivedTypes!, descriptor);
         }
 
@@ -297,7 +300,7 @@ static internal partial class ProjectableInterpreter
         Compilation? compilation,
         ProjectableDescriptor descriptor)
     {
-        var derivedTypes = GetDerivedTypes(semanticModel.GetDeclaredSymbol(originalMemberDeclarationSyntax), compilation, semanticModel);
+        var derivedTypes = GetDerivedTypes(semanticModel.GetDeclaredSymbol(originalMemberDeclarationSyntax), compilation);
         var isHierarchy = derivedTypes?.Count > 0;
 
         ExpressionSyntax? bodyExpression = null;
@@ -356,6 +359,7 @@ static internal partial class ProjectableInterpreter
         // If we are rewriting a hierarchy method we need to invoke the derived types' overrides
         if (isHierarchy)
         {
+            descriptor.HierarchyOriginalExpressionBody = descriptor.ExpressionBody;
             descriptor.ExpressionBody = new HierarchyMembersConverter().DuplicatePropertyExpression(derivedTypes!, descriptor);
         }
 

@@ -64,9 +64,9 @@ namespace Foo {
         var result = RunGenerator(compilation);
 
         Assert.Empty(result.Diagnostics);
-        Assert.Single(result.GeneratedTrees);
+        Assert.Equal(2, result.GeneratedTrees.Length);
 
-        return Verifier.Verify(result.GeneratedTrees[0].ToString());
+        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
     }
 
     [Fact]
@@ -261,9 +261,9 @@ namespace Foo {
         var result = RunGenerator(compilation);
 
         Assert.Empty(result.Diagnostics);
-        Assert.Single(result.GeneratedTrees);
+        Assert.Equal(2, result.GeneratedTrees.Length);
 
-        return Verifier.Verify(result.GeneratedTrees[0].ToString());
+        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
     }
 
     [Fact]
@@ -313,9 +313,9 @@ namespace Foo {
         var result = RunGenerator(compilation);
 
         Assert.Empty(result.Diagnostics);
-        Assert.Single(result.GeneratedTrees);
+        Assert.Equal(2, result.GeneratedTrees.Length);
 
-        return Verifier.Verify(result.GeneratedTrees[0].ToString());
+        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
     }
 
     [Fact]
@@ -390,9 +390,9 @@ namespace Foo {
         var result = RunGenerator(compilation);
 
         Assert.Empty(result.Diagnostics);
-        Assert.Single(result.GeneratedTrees);
+        Assert.Equal(2, result.GeneratedTrees.Length);
 
-        return Verifier.Verify(result.GeneratedTrees[0].ToString());
+        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
     }
 
     [Fact]

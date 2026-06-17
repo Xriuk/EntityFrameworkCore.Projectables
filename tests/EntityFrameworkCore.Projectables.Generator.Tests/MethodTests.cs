@@ -824,9 +824,9 @@ namespace Foo {
         var result = RunGenerator(compilation);
 
         Assert.Empty(result.Diagnostics);
-        Assert.Single(result.GeneratedTrees);
+        Assert.Equal(2, result.GeneratedTrees.Length);
 
-        return Verifier.Verify(result.GeneratedTrees[0].ToString());
+        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
     }
 
     [Fact]
@@ -857,9 +857,9 @@ namespace Foo {
         var result = RunGenerator(compilation);
 
         Assert.Empty(result.Diagnostics);
-        Assert.Single(result.GeneratedTrees);
+        Assert.Equal(2, result.GeneratedTrees.Length);
 
-        return Verifier.Verify(result.GeneratedTrees[0].ToString());
+        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
     }
 
     [Fact]
@@ -891,7 +891,7 @@ namespace Foo {
         var result = RunGenerator(compilation);
 
         Assert.Empty(result.Diagnostics);
-        Assert.Equal(2, result.GeneratedTrees.Length);
+        Assert.Equal(4, result.GeneratedTrees.Length);
 
         return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
     }
@@ -924,9 +924,9 @@ namespace Foo {
         var result = RunGenerator(compilation);
 
         Assert.Empty(result.Diagnostics);
-        Assert.Single(result.GeneratedTrees);
+        Assert.Equal(2, result.GeneratedTrees.Length);
 
-        return Verifier.Verify(result.GeneratedTrees[0].ToString());
+        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
     }
 
     [Fact]
@@ -1039,5 +1039,35 @@ namespace Foo {
         var diag = Assert.Single(result.Diagnostics);
         Assert.Equal("EFP0006", diag.Id);
         Assert.Equal(DiagnosticSeverity.Error, diag.Severity);
+    }
+
+    [Fact]
+    public Task HierarchyBase()
+    {
+        var compilation = CreateCompilation(@"
+using System;
+using System.Linq;
+using System.Collections.Generic;
+using EntityFrameworkCore.Projectables;
+
+namespace Foo {
+    public class Foo {
+        [Projectable]
+        public virtual int Id() => 1;
+    }
+
+    public class Bar : Foo {
+        [Projectable]
+        override public int Id() => true ? 2 : base.Id();
+    }
+}
+");
+
+        var result = RunGenerator(compilation);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(3, result.GeneratedTrees.Length);
+
+        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
     }
 }

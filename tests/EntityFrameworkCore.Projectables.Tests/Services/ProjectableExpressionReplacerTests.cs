@@ -209,5 +209,79 @@ namespace EntityFrameworkCore.Projectables.Tests.Services
         {
             public IQueryable<Entity>? Items { get; set; }
         }
+
+        public class ProjectableExpressionResolverStubBase : IProjectionExpressionResolver, IProjectionExpressionBaseResolver
+        {
+            readonly Func<MemberInfo, ProjectableAttribute?, LambdaExpression> _implementation;
+            readonly Func<MemberInfo, ProjectableAttribute?, LambdaExpression> _implementationBase;
+
+            public ProjectableExpressionResolverStubBase(Func<MemberInfo, ProjectableAttribute?, LambdaExpression> implementation,
+                Func<MemberInfo, ProjectableAttribute?, LambdaExpression> implementationBase)
+            {
+                _implementation = implementation;
+                _implementationBase = implementationBase;
+            }
+
+            public LambdaExpression FindGeneratedExpression(MemberInfo projectableMemberInfo,
+                ProjectableAttribute? projectableAttribute = null) => _implementation(projectableMemberInfo, projectableAttribute);
+            public LambdaExpression FindGeneratedBaseExpression(MemberInfo projectableMemberInfo,
+                ProjectableAttribute? projectableAttribute = null) => _implementationBase(projectableMemberInfo, projectableAttribute);
+        }
+
+        class Foo
+        {
+            [Projectable]
+            public virtual int VirtualProperty => 1;
+
+            [Projectable]
+            public virtual int VirtualMethod() => 1;
+        }
+
+        class Bar : Foo
+        {
+            [Projectable]
+            override public int VirtualProperty => true ? 2 : base.VirtualProperty;
+
+            [Projectable]
+            override public int VirtualMethod() => true ? 2 : base.VirtualProperty;
+        }
+
+        [Fact]
+        public void VisitMember_HierarchyBaseProperty()
+        {
+            Expression<Func<Foo, int>> input = x => x.VirtualProperty;
+            Expression<Func<Foo, int>> expectedFooBase = x => 1;
+            Expression<Func<Bar, int>> expectedBar = x => true ? 2 : ((Foo)x).VirtualProperty;
+            Expression<Func<Foo, int>> expectedFoo = x => x is Bar ? true ? 2 : 1 : 1;
+
+            var resolver = new ProjectableExpressionResolverStubBase(
+                (x, a) => x.DeclaringType == typeof(Foo) ? expectedFoo : expectedBar,
+                (x, a) => expectedFooBase
+            );
+            var subject = new ProjectableExpressionReplacer(resolver);
+
+            var actual = subject.Replace(input);
+
+            Assert.Equal(expectedFoo.ToString(), actual.ToString());
+        }
+
+        [Fact]
+        public void VisitMember_HierarchyBaseMethod()
+        {
+            Expression<Func<Foo, int>> input = x => x.VirtualMethod();
+            Expression<Func<Foo, int>> expectedFooBase = x => 1;
+            Expression<Func<Bar, int>> expectedBar = x => true ? 2 : ((Foo)x).VirtualMethod();
+            Expression<Func<Foo, int>> expectedFoo = x => x is Bar ? true ? 2 : 1 : 1;
+
+            var resolver = new ProjectableExpressionResolverStubBase(
+                (x, a) => x.DeclaringType == typeof(Foo) ? expectedFoo : expectedBar,
+                (x, a) => expectedFooBase
+            );
+            var subject = new ProjectableExpressionReplacer(resolver);
+
+            var actual = subject.Replace(input);
+
+            Assert.Equal(expectedFoo.ToString(), actual.ToString());
+        }
     }
 }
