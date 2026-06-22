@@ -93,8 +93,9 @@ public class ProjectionExpressionGenerator : IIncrementalGenerator
             });
 
         // Build the projection registry: collect all entries and emit a single registry file
-        var registryEntries = compilationAndMemberPairs.Select(
-            static (source, cancellationToken) => {
+        var registryEntries = compilationAndMemberPairs
+            .Where(source => !source.Item1.Member.Modifiers.Any(m => m.IsKind(SyntaxKind.AbstractKeyword)))
+            .Select(static (source, cancellationToken) => {
                 var ((member, _, _), compilation) = source;
 
 #if !ROSLYN_5_0_OR_LATER
@@ -121,6 +122,8 @@ public class ProjectionExpressionGenerator : IIncrementalGenerator
         context.RegisterImplementationSourceOutput(
             registryEntries.Collect(),
             static (spc, entries) => ProjectionRegistryEmitter.Emit(entries, spc));
+
+        // DEV: create a runtime global config for ProjectableAttribute.PolymorphicDispatch
     }
 
     private static SyntaxTriviaList BuildSourceDocComment(ConstructorDeclarationSyntax ctor, Compilation compilation)
@@ -208,7 +211,7 @@ public class ProjectionExpressionGenerator : IIncrementalGenerator
         var projectable = ProjectableInterpreter.GetDescriptor(
             semanticModel, member, memberSymbol, projectableAttribute, globalOptions, context, compilation);
 
-        if (projectable is null)
+        if (projectable is null || projectable.ExpressionBody is null)
         {
             return;
         }
@@ -228,91 +231,81 @@ public class ProjectionExpressionGenerator : IIncrementalGenerator
         }
 
         var generatedClassName = ProjectionExpressionClassNameGenerator.GenerateName(projectable.ClassNamespace, projectable.NestedInClassNames, projectable.MemberName, projectable.ParameterTypeNames);
+        var generatedFileName = projectable.ClassTypeParameterList is not null ? $"{generatedClassName}-{projectable.ClassTypeParameterList.ChildNodes().Count()}.g.cs" : $"{generatedClassName}.g.cs";
 
-        AddSource(generatedClassName, projectable.ExpressionBody);
-        if(projectable.HierarchyOriginalExpressionBody != null)
-        {
-            AddSource(generatedClassName + "_Base", projectable.HierarchyOriginalExpressionBody);
-        }
-
-
-        void AddSource(string generatedClassName, ExpressionSyntax? body)
-        {
-            var generatedFileName = projectable.ClassTypeParameterList is not null ? $"{generatedClassName}-{projectable.ClassTypeParameterList.ChildNodes().Count()}.g.cs" : $"{generatedClassName}.g.cs";
-
-            var classSyntax = ClassDeclaration(generatedClassName)
-                .WithModifiers(TokenList(Token(SyntaxKind.StaticKeyword)))
-                .WithTypeParameterList(projectable.ClassTypeParameterList)
-                .WithConstraintClauses(projectable.ClassConstraintClauses ?? List<TypeParameterConstraintClauseSyntax>())
-                .AddAttributeLists(
-                    AttributeList()
-                        .AddAttributes(_editorBrowsableAttribute)
-                )
-                .WithLeadingTrivia(member is ConstructorDeclarationSyntax ctor && compilation is not null ? BuildSourceDocComment(ctor, compilation) : TriviaList())
-                .AddMembers(
-                    MethodDeclaration(
-                            GenericName(
-                                Identifier("global::System.Linq.Expressions.Expression"),
-                                TypeArgumentList(
-                                    SingletonSeparatedList(
-                                        (TypeSyntax)GenericName(
-                                            Identifier("global::System.Func"),
-                                            GetLambdaTypeArgumentListSyntax(projectable)
-                                        )
-                                    )
-                                )
-                            ),
-                            "Expression"
-                        )
-                        .WithModifiers(TokenList(Token(SyntaxKind.StaticKeyword)))
-                        .WithTypeParameterList(projectable.TypeParameterList)
-                        .WithConstraintClauses(projectable.ConstraintClauses ?? List<TypeParameterConstraintClauseSyntax>())
-                        .WithBody(
-                            Block(
-                                ReturnStatement(
-                                    ParenthesizedLambdaExpression(
-                                        projectable.ParametersList ?? ParameterList(),
-                                        null,
-                                        body
+        var classSyntax = ClassDeclaration(generatedClassName)
+            .WithModifiers(TokenList(Token(SyntaxKind.StaticKeyword)))
+            .WithTypeParameterList(projectable.ClassTypeParameterList)
+            .WithConstraintClauses(projectable.ClassConstraintClauses ?? List<TypeParameterConstraintClauseSyntax>())
+            .AddAttributeLists(
+                AttributeList()
+                    .AddAttributes(_editorBrowsableAttribute)
+            )
+            .WithLeadingTrivia(member is ConstructorDeclarationSyntax ctor && compilation is not null ? BuildSourceDocComment(ctor, compilation) : TriviaList())
+            .AddMembers(
+                MethodDeclaration(
+                        GenericName(
+                            Identifier("global::System.Linq.Expressions.Expression"),
+                            TypeArgumentList(
+                                SingletonSeparatedList(
+                                    (TypeSyntax)GenericName(
+                                        Identifier("global::System.Func"),
+                                        GetLambdaTypeArgumentListSyntax(projectable)
                                     )
                                 )
                             )
+                        ),
+                        "Expression"
+                    )
+                    .WithModifiers(TokenList(Token(SyntaxKind.StaticKeyword)))
+                    .WithTypeParameterList(projectable.TypeParameterList)
+                    .WithConstraintClauses(projectable.ConstraintClauses ?? List<TypeParameterConstraintClauseSyntax>())
+                    .WithBody(
+                        Block(
+                            ReturnStatement(
+                                ParenthesizedLambdaExpression(
+                                    projectable.ParametersList ?? ParameterList(),
+                                    null,
+                                    projectable.ExpressionBody
+                                )
+                            )
                         )
-                );
-
-            var compilationUnit = CompilationUnit();
-
-            foreach (var usingDirective in projectable.UsingDirectives!)
-            {
-                compilationUnit = compilationUnit.AddUsings(usingDirective);
-            }
-
-            if (projectable.ClassNamespace is not null)
-            {
-                compilationUnit = compilationUnit.AddUsings(
-                    UsingDirective(
-                        ParseName(projectable.ClassNamespace)
                     )
-                );
-            }
+            );
 
-            compilationUnit = compilationUnit
-                .AddMembers(
-                    NamespaceDeclaration(
-                        ParseName("EntityFrameworkCore.Projectables.Generated")
-                    ).AddMembers(classSyntax)
-                )
-                .WithLeadingTrivia(
-                    TriviaList(
-                        Comment("// <auto-generated/>"),
-                        // Uncomment line below, for debugging purposes, to see when the generator is run on source generated files
-                        // CarriageReturnLineFeed, Comment($"// Generated at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} UTC for '{memberSymbol.Name}' in '{memberSymbol.ContainingType?.Name}'"),
-                        Trivia(NullableDirectiveTrivia(Token(SyntaxKind.DisableKeyword), true))
-                    )
-                );
+        var compilationUnit = CompilationUnit();
 
-            context.AddSource(generatedFileName, SourceText.From(compilationUnit.NormalizeWhitespace().ToFullString(), Encoding.UTF8));
+        foreach (var usingDirective in projectable.UsingDirectives!)
+        {
+            compilationUnit = compilationUnit.AddUsings(usingDirective);
         }
+
+        if (projectable.ClassNamespace is not null)
+        {
+            compilationUnit = compilationUnit.AddUsings(
+                UsingDirective(
+                    ParseName(projectable.ClassNamespace)
+                )
+            );
+        }
+
+        compilationUnit = compilationUnit
+            .AddMembers(
+                NamespaceDeclaration(
+                    ParseName("EntityFrameworkCore.Projectables.Generated")
+                ).AddMembers(classSyntax)
+            )
+            .WithLeadingTrivia(
+                TriviaList(
+                    Comment("// <auto-generated/>"),
+                    // Uncomment line below, for debugging purposes, to see when the generator is run on source generated files
+                    // CarriageReturnLineFeed, Comment($"// Generated at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} UTC for '{memberSymbol.Name}' in '{memberSymbol.ContainingType?.Name}'"),
+                    Trivia(NullableDirectiveTrivia(Token(SyntaxKind.DisableKeyword), true))
+                )
+            );
+
+        context.AddSource(generatedFileName, SourceText.From(compilationUnit.NormalizeWhitespace().ToFullString(), Encoding.UTF8));
+
 
         static TypeArgumentListSyntax GetLambdaTypeArgumentListSyntax(ProjectableDescriptor projectable)
         {

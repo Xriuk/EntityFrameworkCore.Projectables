@@ -9,8 +9,5 @@ public static class ExpressionExtensions
     /// Replaces all calls to properties and methods that are marked with the <C>Projectable</C> attribute with their respective expression tree
     /// </summary>
     public static Expression ExpandProjectables(this Expression expression)
-    {
-        var resolver = new ProjectionExpressionResolver();
-        return new ProjectableExpressionReplacer(resolver, resolver, false).Replace(expression);
-    }
+        => new ProjectableExpressionReplacer(new ProjectionExpressionResolver(), false).Replace(expression);
 }

@@ -26,14 +26,6 @@ internal partial class ExpressionSyntaxRewriter : CSharpSyntaxRewriter
     }
 
     public SemanticModel GetSemanticModel() => _semanticModel;
-
-    private SyntaxNode? VisitThisBaseExpression(CSharpSyntaxNode node)
-    {
-        // Swap out the use of this and base to @this and keep leading and trailing trivias
-        return SyntaxFactory.IdentifierName("@this")
-            .WithLeadingTrivia(node.GetLeadingTrivia())
-            .WithTrailingTrivia(node.GetTrailingTrivia());
-    }
     
     public override SyntaxNode? VisitMemberAccessExpression(MemberAccessExpressionSyntax node)
     {
@@ -110,13 +102,15 @@ internal partial class ExpressionSyntaxRewriter : CSharpSyntaxRewriter
 
     public override SyntaxNode? VisitThisExpression(ThisExpressionSyntax node)
     {
-        // Swap out the use of this to @this
-        return VisitThisBaseExpression(node);
+        // Swap out the use of this and base to @this and keep leading and trailing trivias
+        return SyntaxFactory.IdentifierName("@this")
+            .WithLeadingTrivia(node.GetLeadingTrivia())
+            .WithTrailingTrivia(node.GetTrailingTrivia());
     }
 
     public override SyntaxNode? VisitBaseExpression(BaseExpressionSyntax node)
     {
-        // Swap out the use of this to @this and cast it to the base type
+        // Swap out the use of this to @this and cast it to the base type and keep leading and trailing trivias
         return SyntaxFactory.ParenthesizedExpression(
             SyntaxFactory.CastExpression(
                 SyntaxFactory.ParseTypeName(_semanticModel.GetTypeInfo(node).Type!.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)),

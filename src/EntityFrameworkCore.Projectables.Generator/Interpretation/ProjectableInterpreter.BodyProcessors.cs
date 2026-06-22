@@ -14,22 +14,17 @@ static internal partial class ProjectableInterpreter
     /// Returns <c>false</c> and reports diagnostics on failure.
     /// </summary>
     private static bool TryApplyMethodBody(
-        MemberDeclarationSyntax originalMemberDeclarationSyntax,
         MethodDeclarationSyntax methodDeclarationSyntax,
-        SemanticModel semanticModel,
         bool allowBlockBody,
+        bool polymorphicDispatch,
         ISymbol memberSymbol,
         ExpressionSyntaxRewriter expressionSyntaxRewriter,
         DeclarationSyntaxRewriter declarationSyntaxRewriter,
         SourceProductionContext context,
-        Compilation? compilation,
         ProjectableDescriptor descriptor)
     {
         ExpressionSyntax? bodyExpression = null;
         var isExpressionBodied = false;
-
-        var derivedTypes = GetDerivedTypes(semanticModel.GetDeclaredSymbol(originalMemberDeclarationSyntax), compilation);
-        var isHierarchy = derivedTypes?.Count > 0;
 
         if (methodDeclarationSyntax.ExpressionBody is not null)
         {
@@ -54,7 +49,7 @@ static internal partial class ProjectableInterpreter
                 return false; // diagnostics already reported by BlockStatementConverter
             }
         }
-        else if (!isHierarchy)
+        else if (!polymorphicDispatch)
         {
             return ReportRequiresBodyAndFail(context, methodDeclarationSyntax, memberSymbol.Name);
         }
@@ -79,13 +74,6 @@ static internal partial class ProjectableInterpreter
             ApplyExtensionBlockTypeParameters(memberSymbol, descriptor);
         }
 
-        // If we are rewriting a hierarchy method we need to invoke the derived types' overrides
-        if(isHierarchy)
-        {
-            descriptor.HierarchyOriginalExpressionBody = descriptor.ExpressionBody;
-            descriptor.ExpressionBody = new HierarchyMembersConverter().DuplicateMethodExpression(derivedTypes!, descriptor);
-        }
-
         return true;
     }
 
@@ -100,23 +88,20 @@ static internal partial class ProjectableInterpreter
         MethodDeclarationSyntax originalMethodDecl,
         PropertyDeclarationSyntax exprPropDecl,
         SemanticModel semanticModel,
+        bool polymorphicDispatch,
         MemberDeclarationSyntax member,
         ISymbol memberSymbol,
         ExpressionSyntaxRewriter expressionSyntaxRewriter,
         DeclarationSyntaxRewriter declarationSyntaxRewriter,
         SourceProductionContext context,
-        Compilation? compilation,
         ProjectableDescriptor descriptor)
     {
-        var derivedTypes = GetDerivedTypes(semanticModel.GetDeclaredSymbol(originalMethodDecl), compilation);
-        var isHierarchy = derivedTypes?.Count > 0;
-
         var rawExpr = TryGetPropertyGetterExpression(exprPropDecl);
         var (innerBody, lambdaParamNames) = rawExpr is not null
             ? TryExtractLambdaBodyAndParams(rawExpr, semanticModel, member.SyntaxTree)
             : (null, []);
 
-        if (innerBody is null && !isHierarchy)
+        if (innerBody is null && !polymorphicDispatch)
         {
             return ReportRequiresBodyAndFail(context, exprPropDecl, memberSymbol.Name);
         }
@@ -211,13 +196,6 @@ static internal partial class ProjectableInterpreter
         ApplyParameterList(originalMethodDecl.ParameterList, declarationSyntaxRewriter, descriptor);
         ApplyTypeParameters(originalMethodDecl, declarationSyntaxRewriter, descriptor);
 
-        // If we are rewriting a hierarchy method we need to invoke the derived types' overrides
-        if (isHierarchy)
-        {
-            descriptor.HierarchyOriginalExpressionBody = descriptor.ExpressionBody;
-            descriptor.ExpressionBody = new HierarchyMembersConverter().DuplicateMethodExpression(derivedTypes!, descriptor);
-        }
-
         return true;
     }
 
@@ -233,23 +211,20 @@ static internal partial class ProjectableInterpreter
         PropertyDeclarationSyntax originalPropertyDecl,
         PropertyDeclarationSyntax exprPropDecl,
         SemanticModel semanticModel,
+        bool polymorphicDispatch,
         MemberDeclarationSyntax member,
         ISymbol memberSymbol,
         ExpressionSyntaxRewriter expressionSyntaxRewriter,
         DeclarationSyntaxRewriter declarationSyntaxRewriter,
         SourceProductionContext context,
-        Compilation? compilation,
         ProjectableDescriptor descriptor)
     {
-        var derivedTypes = GetDerivedTypes(semanticModel.GetDeclaredSymbol(originalPropertyDecl), compilation);
-        var isHierarchy = derivedTypes?.Count > 0;
-
         var rawExpr = TryGetPropertyGetterExpression(exprPropDecl);
         var (innerBody, firstParamName) = rawExpr is not null
             ? TryExtractLambdaBodyAndFirstParam(rawExpr, semanticModel, member.SyntaxTree)
             : (null, null);
 
-        if (innerBody is null && !isHierarchy)
+        if (innerBody is null && !polymorphicDispatch)
         {
             return ReportRequiresBodyAndFail(context, exprPropDecl, memberSymbol.Name);
         }
@@ -274,13 +249,6 @@ static internal partial class ProjectableInterpreter
         descriptor.ReturnTypeName = returnType.ToString();
         descriptor.ExpressionBody = visitedBody;
 
-        // If we are rewriting a hierarchy method we need to invoke the derived types' overrides
-        if (isHierarchy)
-        {
-            descriptor.HierarchyOriginalExpressionBody = descriptor.ExpressionBody;
-            descriptor.ExpressionBody = new HierarchyMembersConverter().DuplicatePropertyExpression(derivedTypes!, descriptor);
-        }
-
         return true;
     }
 
@@ -289,20 +257,15 @@ static internal partial class ProjectableInterpreter
     /// Returns <c>false</c> and reports diagnostics on failure.
     /// </summary>
     private static bool TryApplyPropertyBody(
-        MemberDeclarationSyntax originalMemberDeclarationSyntax,
         PropertyDeclarationSyntax propertyDeclarationSyntax,
-        SemanticModel semanticModel,
         bool allowBlockBody,
+        bool polymorphicDispatch,
         ISymbol memberSymbol,
         ExpressionSyntaxRewriter expressionSyntaxRewriter,
         DeclarationSyntaxRewriter declarationSyntaxRewriter,
         SourceProductionContext context,
-        Compilation? compilation,
         ProjectableDescriptor descriptor)
     {
-        var derivedTypes = GetDerivedTypes(semanticModel.GetDeclaredSymbol(originalMemberDeclarationSyntax), compilation);
-        var isHierarchy = derivedTypes?.Count > 0;
-
         ExpressionSyntax? bodyExpression = null;
         var isBlockBodiedGetter = false;
 
@@ -343,7 +306,7 @@ static internal partial class ProjectableInterpreter
             }
         }
 
-        if (bodyExpression is null && !isHierarchy)
+        if (bodyExpression is null && !polymorphicDispatch)
         {
             return ReportRequiresBodyAndFail(context, propertyDeclarationSyntax, memberSymbol.Name);
         }
@@ -355,13 +318,6 @@ static internal partial class ProjectableInterpreter
         descriptor.ExpressionBody = isBlockBodiedGetter || bodyExpression == null
             ? bodyExpression
             : (ExpressionSyntax)expressionSyntaxRewriter.Visit(bodyExpression);
-
-        // If we are rewriting a hierarchy method we need to invoke the derived types' overrides
-        if (isHierarchy)
-        {
-            descriptor.HierarchyOriginalExpressionBody = descriptor.ExpressionBody;
-            descriptor.ExpressionBody = new HierarchyMembersConverter().DuplicatePropertyExpression(derivedTypes!, descriptor);
-        }
 
         return true;
     }

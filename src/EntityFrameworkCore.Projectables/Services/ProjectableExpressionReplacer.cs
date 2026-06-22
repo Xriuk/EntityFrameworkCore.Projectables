@@ -13,14 +13,13 @@ namespace EntityFrameworkCore.Projectables.Services
     public sealed class ProjectableExpressionReplacer : ExpressionVisitor
     {
         private readonly IProjectionExpressionResolver _resolver;
-        private readonly IProjectionExpressionBaseResolver _resolverBase;
         private readonly ExpressionArgumentReplacer _expressionArgumentReplacer = new();
         private readonly Dictionary<MemberInfo, LambdaExpression?> _projectableMemberCache = new();
-        private readonly Dictionary<MemberInfo, LambdaExpression?> _projectableBaseMemberCache = new();
         private readonly HashSet<ConstructorInfo> _expandingConstructors = new();
         private IQueryProvider? _currentQueryProvider;
         private bool _disableRootRewrite = false;
         private readonly bool _trackingByDefault;
+        private readonly bool _polymorphicDispatchGlobal;
         private IEntityType? _entityType;
 
         // Extract MethodInfo via expression trees (trim-safe; computed once per AppDomain)
@@ -40,38 +39,16 @@ namespace EntityFrameworkCore.Projectables.Services
         private readonly static ConditionalWeakTable<Type, MethodInfo> _closedSelectCache = new();
         private readonly static ConditionalWeakTable<Type, MethodInfo> _closedWhereCache = new();
 
-        public ProjectableExpressionReplacer(IProjectionExpressionResolver projectionExpressionResolver, bool trackByDefault = false):
-            this(projectionExpressionResolver, null!, trackByDefault) { }
-        public ProjectableExpressionReplacer(
-            IProjectionExpressionResolver projectionExpressionResolver,
-            IProjectionExpressionBaseResolver projectionExpressionBaseResolver,
-            bool trackByDefault = false)
+        public ProjectableExpressionReplacer(IProjectionExpressionResolver projectionExpressionResolver, bool trackByDefault = false)
         {
             _trackingByDefault = trackByDefault;
             _resolver = projectionExpressionResolver;
-            _resolverBase = projectionExpressionBaseResolver;
+            _polymorphicDispatchGlobal = false; // DEV: retrieve from global config
         }
 
         bool TryGetReflectedExpression(MemberInfo memberInfo, [NotNullWhen(true)] out LambdaExpression? reflectedExpression)
         {
-            return TryGetReflectedExpression(memberInfo, false, out reflectedExpression);
-        }
-        bool TryGetReflectedExpression(MemberInfo memberInfo, bool isBase, [NotNullWhen(true)] out LambdaExpression? reflectedExpression)
-        {
-            if (isBase)
-            {
-                if (!_projectableBaseMemberCache.TryGetValue(memberInfo, out reflectedExpression))
-                {
-                    var projectableAttribute = memberInfo.GetCustomAttribute<ProjectableAttribute>(false);
-
-                    reflectedExpression = projectableAttribute is not null
-                        ? _resolverBase?.FindGeneratedBaseExpression(memberInfo, projectableAttribute)
-                        : null;
-
-                    _projectableBaseMemberCache.Add(memberInfo, reflectedExpression);
-                }
-            }
-            else if (!_projectableMemberCache.TryGetValue(memberInfo, out reflectedExpression))
+            if (!_projectableMemberCache.TryGetValue(memberInfo, out reflectedExpression))
             {
                 var projectableAttribute = memberInfo.GetCustomAttribute<ProjectableAttribute>(false);
 
@@ -215,56 +192,168 @@ namespace EntityFrameworkCore.Projectables.Services
             // unwrapping nested casts, because the original parameter might have been replaced
             var isBase = (node.Object is UnaryExpression u && UnwrapUnaryConvert(u) != u);
 
-            if (TryGetReflectedExpression(methodInfo, isBase, out var reflectedExpression))
-            {
-                for (var parameterIndex = 0; parameterIndex < reflectedExpression.Parameters.Count; parameterIndex++)
-                {
-                    var parameterExpression = reflectedExpression.Parameters[parameterIndex];
-                    var mappedArgumentExpression = (parameterIndex, node.Object) switch {
-                        (0, not null) => node.Object,
-                        (_, not null) => node.Arguments[parameterIndex - 1],
-                        (_, null) => node.Arguments.Count > parameterIndex ? node.Arguments[parameterIndex] : null
-                    };
+            var polymorphicDispatch = !isBase && IsPolymorphic(methodInfo) &&
+                methodInfo.GetCustomAttribute<ProjectableAttribute>() is ProjectableAttribute projectable &&
+                (projectable.PolymorphicDispatch || _polymorphicDispatchGlobal);
 
-                    if (mappedArgumentExpression is not null)
+            if ((TryGetReflectedExpression(methodInfo, out var reflectedExpression) && reflectedExpression != null) || polymorphicDispatch)
+            {
+                if (polymorphicDispatch)
+                {
+                    var derivedTypes = RetrieveTypes(methodInfo.DeclaringType!, methodInfo);
+                    if (derivedTypes.Count > 0)
                     {
-                        // If the type is different in case of a base call we re-cast it
-                        if(isBase && mappedArgumentExpression.Type != parameterExpression.Type &&
-                            mappedArgumentExpression.Type.IsAssignableTo(parameterExpression.Type) &&
-                            mappedArgumentExpression is UnaryExpression u2)
+                        var arguments = node.Arguments.ToArray();
+
+                        // Check if the method has an implementation or if it is abstract, if it is not abstract it will be added
+                        // as the last result in the if/else if/else chain, otherwise the last type will be used instead
+                        Expression body;
+                        if (reflectedExpression != null)
                         {
-                            var unwrapped = UnwrapUnaryConvert(u2);
-                            if (unwrapped != u2)
-                            {
-                                mappedArgumentExpression = Expression.Convert(unwrapped, parameterExpression.Type);
-                            }
+                            // @this is Type1 ? ((Type1)@this).Method(...) : ...
+                            // ... ? ... :
+                            // @this is TypeN ? ((TypeN)@this).Method(...) : ...
+                            // virtualImplementation
+                            body = derivedTypes.AsEnumerable()
+                                .Reverse()
+                                .Aggregate(reflectedExpression.Body, AggregateTypes);
+                        }
+                        else
+                        {
+                            // DEV: handle generic types
+                            var lastType = derivedTypes[derivedTypes.Count - 1];
+
+                            // @this is Type1 ? ((Type1)@this).Method(...) : ...
+                            // ... ? ... :
+                            // ((TypeN)@this).Method(...)
+                            body = derivedTypes.AsEnumerable()
+                                .Reverse()
+                                .Skip(1)
+                                .Aggregate((Expression)Expression.Call(Expression.Convert(node.Object!, lastType), methodInfo.Name, null, arguments), AggregateTypes);
                         }
 
+                        return Visit(body);
 
-                        _expressionArgumentReplacer.ParameterArgumentMapping.Add(parameterExpression, mappedArgumentExpression);
+
+                        Expression AggregateTypes(Expression expr, Type type)
+                        {
+                            return Expression.Condition(
+                                Expression.TypeIs(node.Object!, type),
+                                Expression.Call(Expression.Convert(node.Object!, type), methodInfo.Name, null, arguments),
+                                expr);
+                        }
                     }
                 }
 
-                var updatedBody = _expressionArgumentReplacer.Visit(reflectedExpression.Body);
-                _expressionArgumentReplacer.ParameterArgumentMapping.Clear();
+                if (reflectedExpression != null)
+                {
+                    for (var parameterIndex = 0; parameterIndex < reflectedExpression.Parameters.Count; parameterIndex++)
+                    {
+                        var parameterExpression = reflectedExpression.Parameters[parameterIndex];
+                        var mappedArgumentExpression = (parameterIndex, node.Object) switch {
+                            (0, not null) => node.Object,
+                            (_, not null) => node.Arguments[parameterIndex - 1],
+                            (_, null) => node.Arguments.Count > parameterIndex ? node.Arguments[parameterIndex] : null
+                        };
 
-                return base.Visit(
-                    updatedBody
-                );
+                        if (mappedArgumentExpression is not null)
+                        {
+                            // If the type is different in case of a base call we re-cast it
+                            if (isBase && mappedArgumentExpression.Type != parameterExpression.Type &&
+                                mappedArgumentExpression.Type.IsAssignableTo(parameterExpression.Type) &&
+                                mappedArgumentExpression is UnaryExpression u2)
+                            {
+                                var unwrapped = UnwrapUnaryConvert(u2);
+                                if (unwrapped != u2)
+                                {
+                                    mappedArgumentExpression = Expression.Convert(unwrapped, parameterExpression.Type);
+                                }
+                            }
+
+                            _expressionArgumentReplacer.ParameterArgumentMapping.Add(parameterExpression, mappedArgumentExpression);
+                        }
+                    }
+
+                    var updatedBody = _expressionArgumentReplacer.Visit(reflectedExpression.Body);
+                    _expressionArgumentReplacer.ParameterArgumentMapping.Clear();
+
+                    return Visit(updatedBody);
+                }
             }
 
             return base.VisitMethodCall(node);
         }
 
-        private Expression UnwrapUnaryConvert(UnaryExpression node)
+        private static bool IsPolymorphic(MethodInfo? method)
+        {
+            return method != null && (method.IsAbstract || method.IsVirtual || method.GetBaseDefinition() != method);
+        }
+
+        private static Expression UnwrapUnaryConvert(UnaryExpression node)
         {
             if (node.NodeType != ExpressionType.Convert || node.Type != node.Operand.Type.BaseType)
+            {
                 return node;
+            }
 
             if (node.Operand is UnaryExpression u)
+            {
                 return UnwrapUnaryConvert(u);
+            }
             else
+            {
                 return node.Operand;
+            }
+        }
+
+        private static List<Type> RetrieveTypes(Type baseType, MemberInfo member)
+        {
+            Func<Type, MemberInfo?> memberGetter;
+            if (member is MethodInfo method)
+            {
+                var parameters = method.GetParameters()
+                    .Select(p => p.ParameterType)
+                    .ToArray();
+                memberGetter = t => t.GetMethod(member.Name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly, parameters);
+            }
+            else
+            {
+                memberGetter = t => t.GetProperty(member.Name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly, null, ((PropertyInfo)member).PropertyType, Array.Empty<Type>(), null);
+            }
+
+            // Retrieve all the derived types which have an override of the member
+            var types = AppDomain.CurrentDomain.GetAssemblies()
+                .SelectMany(a => a.GetTypes())
+                .Where(t => t != baseType && t.IsAssignableTo(baseType) && memberGetter.Invoke(t) != null)
+                .OrderByDescending(GetDepth) // More specific types first
+                .ThenBy(t => t.Name)
+                .ToList();
+
+            // Remove types which are derived from another type in the list which has the declared symbol
+            // with the Projectable attribute (generation will be delegated to them)
+            var typesToRemove = types.Where(t => types.Any(tt => t != tt && t.IsAssignableTo(tt) &&
+                    memberGetter.Invoke(t)?.GetCustomAttribute<ProjectableAttribute>() != null))
+                .ToList();
+
+            foreach (var type in typesToRemove)
+            {
+                types.Remove(type);
+            }
+
+            return types;
+
+
+            static int GetDepth(Type type)
+            {
+                var depth = 0;
+                while (type.BaseType != null)
+                {
+                    depth++;
+                    type = type.BaseType;
+                }
+
+                return depth;
+            }
         }
 
         protected override Expression VisitNew(NewExpression node)
@@ -354,22 +443,89 @@ namespace EntityFrameworkCore.Projectables.Services
                 _ => node.Member
             };
 
-            // Check if we are rewriting a base property ((BaseType)@this).MyProp
-            var isBase = (node.Expression is UnaryExpression u && u.NodeType == ExpressionType.Convert &&
-                u.Type == u.Operand.Type.BaseType && u.Operand is ParameterExpression p && p.Name == "@this");
+            // Check if we are rewriting a base property ((BaseType)@this).MyProp or ((BaseBaseType)(BaseType)@this).MyProp
+            // We are only checking for a type cast from a type to its immediate parent,
+            // unwrapping nested casts, because the original parameter might have been replaced
+            var isBase = (node.Expression is UnaryExpression u && UnwrapUnaryConvert(u) != u);
 
-            if (TryGetReflectedExpression(nodeMember, isBase, out var reflectedExpression))
+            // If we don't have an expression we might have an abstract property with Projectable attribute
+            // and PolymorphicDispatch set to true, so we check that
+            var polymorphicDispatch = !isBase && nodeMember is PropertyInfo p && IsPolymorphic(p.GetGetMethod()) &&
+                nodeMember.GetCustomAttribute<ProjectableAttribute>() is ProjectableAttribute projectable &&
+                (projectable.PolymorphicDispatch || _polymorphicDispatchGlobal);
+
+            if ((TryGetReflectedExpression(nodeMember, out var reflectedExpression) && reflectedExpression != null) || polymorphicDispatch)
             {
-                if (nodeExpression is not null)
+                if (polymorphicDispatch)
                 {
-                    _expressionArgumentReplacer.ParameterArgumentMapping.Add(reflectedExpression.Parameters[0], nodeExpression);
-                    var updatedBody = _expressionArgumentReplacer.Visit(reflectedExpression.Body);
-                    _expressionArgumentReplacer.ParameterArgumentMapping.Clear();
+                    var derivedTypes = RetrieveTypes(nodeMember.DeclaringType!, nodeMember);
+                    if (derivedTypes.Count > 0)
+                    {
+                        // Check if the method has an implementation or if it is abstract, if it is not abstract it will be added
+                        // as the last result in the if/else if/else chain, otherwise the last type will be used instead
+                        Expression body;
+                        if (reflectedExpression != null)
+                        {
+                            // @this is Type1 ? ((Type1)@this).Property : ...
+                            // ... ? ... :
+                            // @this is TypeN ? ((TypeN)@this).Property : ...
+                            // virtualImplementation
+                            body = derivedTypes.AsEnumerable()
+                                .Reverse()
+                                .Aggregate(reflectedExpression.Body, AggregateTypes);
+                        }
+                        else
+                        {
+                            // DEV: handle generic types
+                            var lastType = derivedTypes[derivedTypes.Count - 1];
 
-                    return base.Visit(updatedBody);
+                            // @this is Type1 ? ((Type1)@this).Property : ...
+                            // ... ? ... :
+                            // ((TypeN)@this).Property
+                            body = derivedTypes.AsEnumerable()
+                                .Reverse()
+                                .Skip(1)
+                                .Aggregate((Expression)Expression.Property(Expression.Convert(node.Expression!, lastType), nodeMember.Name), AggregateTypes);
+                        }
+
+                        return Visit(body);
+
+
+                        Expression AggregateTypes(Expression expr, Type type)
+                        {
+                            return Expression.Condition(
+                                Expression.TypeIs(node.Expression!, type),
+                                Expression.Property(Expression.Convert(node.Expression!, type), nodeMember.Name),
+                                expr);
+                        }
+                    }
                 }
 
-                return base.Visit(reflectedExpression.Body);
+                if (reflectedExpression != null)
+                {
+                    if (nodeExpression is not null)
+                    {
+                        // If the type is different in case of a base call we re-cast it
+                        if (isBase && nodeExpression.Type != reflectedExpression.Parameters[0].Type &&
+                            nodeExpression.Type.IsAssignableTo(reflectedExpression.Parameters[0].Type) &&
+                            nodeExpression is UnaryExpression u2)
+                        {
+                            var unwrapped = UnwrapUnaryConvert(u2);
+                            if (unwrapped != u2)
+                            {
+                                nodeExpression = Expression.Convert(unwrapped, reflectedExpression.Parameters[0].Type);
+                            }
+                        }
+
+                        _expressionArgumentReplacer.ParameterArgumentMapping.Add(reflectedExpression.Parameters[0], nodeExpression);
+                        var updatedBody = _expressionArgumentReplacer.Visit(reflectedExpression.Body);
+                        _expressionArgumentReplacer.ParameterArgumentMapping.Clear();
+
+                        return Visit(updatedBody);
+                    }
+
+                    return Visit(reflectedExpression.Body);
+                }
             }
 
             return base.VisitMember(node);

@@ -43,33 +43,6 @@ namespace Foo {
     }
 
     [Fact]
-    public Task Method_UsesMethodBody_Hierarchy()
-    {
-        var compilation = CreateCompilation(@"
-using System;
-using EntityFrameworkCore.Projectables;
-namespace Foo {
-    public class Foo {
-        [Projectable(UseMemberBody = nameof(IdImpl))]
-        public virtual int Id() => 1;
-
-        private int IdImpl() => 2;
-    }
-
-    public class Bar : Foo {
-        override public int Id() => 3;
-    }
-}
-");
-        var result = RunGenerator(compilation);
-
-        Assert.Empty(result.Diagnostics);
-        Assert.Equal(2, result.GeneratedTrees.Length);
-
-        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
-    }
-
-    [Fact]
     public Task Method_UsesExpressionPropertyBody_StaticExtension()
     {
         var compilation = CreateCompilation(@"
@@ -239,34 +212,6 @@ namespace Foo {
     }
 
     [Fact]
-    public Task Method_UsesExpressionPropertyBody_Hierarchy()
-    {
-        var compilation = CreateCompilation(@"
-using System;
-using System.Linq.Expressions;
-using EntityFrameworkCore.Projectables;
-namespace Foo {
-    public class Foo {
-        [Projectable(UseMemberBody = nameof(IdImpl))]
-        public virtual int Id() => 1;
-
-        private static Expression<Func<Foo, int>> IdImpl => @this => 2;
-    }
-
-    public class Bar : Foo {
-        override public int Id() => 3;
-    }
-}
-");
-        var result = RunGenerator(compilation);
-
-        Assert.Empty(result.Diagnostics);
-        Assert.Equal(2, result.GeneratedTrees.Length);
-
-        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
-    }
-
-    [Fact]
     public Task Property_UsesPropertyBody_SameType()
     {
         var compilation = CreateCompilation(@"
@@ -289,33 +234,6 @@ namespace Foo {
         Assert.Single(result.GeneratedTrees);
 
         return Verifier.Verify(result.GeneratedTrees[0].ToString());
-    }
-
-    [Fact]
-    public Task Property_UsesPropertyBody_Hierarchy()
-    {
-        var compilation = CreateCompilation(@"
-using System;
-using EntityFrameworkCore.Projectables;
-namespace Foo {
-    public class Foo {
-        [Projectable(UseMemberBody = nameof(IdImpl))]
-        public virtual int Id => 1;
-
-        private int IdImpl => 2;
-    }
-
-    public class Bar : Foo {
-        override public int Id => 3;
-    }
-}
-");
-        var result = RunGenerator(compilation);
-
-        Assert.Empty(result.Diagnostics);
-        Assert.Equal(2, result.GeneratedTrees.Length);
-
-        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
     }
 
     [Fact]
@@ -365,34 +283,6 @@ namespace Foo {
         Assert.Single(result.GeneratedTrees);
 
         return Verifier.Verify(result.GeneratedTrees[0].ToString());
-    }
-
-    [Fact]
-    public Task Property_UsesExpressionPropertyBody_Hierarchy()
-    {
-        var compilation = CreateCompilation(@"
-using System;
-using System.Linq.Expressions;
-using EntityFrameworkCore.Projectables;
-namespace Foo {
-    public class Foo {
-        [Projectable(UseMemberBody = nameof(IdImpl))]
-        public virtual int Id => 1;
-
-        private static Expression<Func<Foo, int>> IdImpl => @this => 2;
-    }
-
-    public class Bar : Foo {
-        override public int Id => 3;
-    }
-}
-");
-        var result = RunGenerator(compilation);
-
-        Assert.Empty(result.Diagnostics);
-        Assert.Equal(2, result.GeneratedTrees.Length);
-
-        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
     }
 
     [Fact]

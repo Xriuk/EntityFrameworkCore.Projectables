@@ -34,6 +34,4 @@ internal class ProjectableDescriptor
     public SyntaxList<TypeParameterConstraintClauseSyntax>? ConstraintClauses { get; set; }
 
     public ExpressionSyntax? ExpressionBody { get; set; }
-
-    public ExpressionSyntax? HierarchyOriginalExpressionBody { get; set; }
 }

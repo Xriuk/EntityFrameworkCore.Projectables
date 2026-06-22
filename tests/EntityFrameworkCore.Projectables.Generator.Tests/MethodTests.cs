@@ -1,8 +1,4 @@
-﻿using System.Linq;
-using System.Threading.Tasks;
-using Microsoft.CodeAnalysis;
-using VerifyXunit;
-using Xunit;
+﻿using Microsoft.CodeAnalysis;
 
 namespace EntityFrameworkCore.Projectables.Generator.Tests;
 
@@ -801,136 +797,7 @@ namespace One.Two {
     }
 
     [Fact]
-    public Task Hierarchy()
-    {
-        var compilation = CreateCompilation(@"
-using System;
-using System.Linq;
-using System.Collections.Generic;
-using EntityFrameworkCore.Projectables;
-
-namespace Foo {
-    public class Foo {
-        [Projectable]
-        public virtual int Id() => 1;
-    }
-
-    public class Bar : Foo {
-        override public int Id() => 2;
-    }
-}
-");
-
-        var result = RunGenerator(compilation);
-
-        Assert.Empty(result.Diagnostics);
-        Assert.Equal(2, result.GeneratedTrees.Length);
-
-        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
-    }
-
-    [Fact]
-    public Task HierarchyMultiple()
-    {
-        var compilation = CreateCompilation(@"
-using System;
-using System.Linq;
-using System.Collections.Generic;
-using EntityFrameworkCore.Projectables;
-
-namespace Foo {
-    public class Foo {
-        [Projectable]
-        public virtual int Id() => 1;
-    }
-
-    public class Bar : Foo {
-        override public int Id() => 2;
-    }
-
-    public class Baz : Foo {
-        override public int Id() => 3;
-    }
-}
-");
-
-        var result = RunGenerator(compilation);
-
-        Assert.Empty(result.Diagnostics);
-        Assert.Equal(2, result.GeneratedTrees.Length);
-
-        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
-    }
-
-    [Fact]
-    public Task HierarchyNotNestedWithAttribute()
-    {
-        var compilation = CreateCompilation(@"
-using System;
-using System.Linq;
-using System.Collections.Generic;
-using EntityFrameworkCore.Projectables;
-
-namespace Foo {
-    public class Foo {
-        [Projectable]
-        public virtual int Id() => 1;
-    }
-
-    public class Bar : Foo {
-        [Projectable]
-        override public int Id() => 2;
-    }
-
-    public class Baz : Bar {
-        override public int Id() => 3;
-    }
-}
-");
-
-        var result = RunGenerator(compilation);
-
-        Assert.Empty(result.Diagnostics);
-        Assert.Equal(4, result.GeneratedTrees.Length);
-
-        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
-    }
-
-    [Fact]
-    public Task HierarchyNestedWithoutAttribute()
-    {
-        var compilation = CreateCompilation(@"
-using System;
-using System.Linq;
-using System.Collections.Generic;
-using EntityFrameworkCore.Projectables;
-
-namespace Foo {
-    public class Foo {
-        [Projectable]
-        public virtual int Id() => 1;
-    }
-
-    public class Bar : Foo {
-        override public int Id() => 2;
-    }
-
-    public class Baz : Bar {
-        override public int Id() => 3;
-    }
-}
-");
-
-        var result = RunGenerator(compilation);
-
-        Assert.Empty(result.Diagnostics);
-        Assert.Equal(2, result.GeneratedTrees.Length);
-
-        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
-    }
-
-    [Fact]
-    public Task HierarchyAbstract()
+    public void AbstractWithPolymorphicDispatch()
     {
         var compilation = CreateCompilation(@"
 using System;
@@ -940,12 +807,8 @@ using EntityFrameworkCore.Projectables;
 
 namespace Foo {
     public abstract class Foo {
-        [Projectable]
+        [Projectable(PolymorphicDispatch = true)]
         public abstract int Id();
-    }
-
-    public class Bar : Foo {
-        override public int Id() => 2;
     }
 }
 ");
@@ -953,121 +816,6 @@ namespace Foo {
         var result = RunGenerator(compilation);
 
         Assert.Empty(result.Diagnostics);
-        Assert.Single(result.GeneratedTrees);
-
-        return Verifier.Verify(result.GeneratedTrees[0].ToString());
-    }
-
-    [Fact]
-    public Task HierarchyAbstractMultiple()
-    {
-        var compilation = CreateCompilation(@"
-using System;
-using System.Linq;
-using System.Collections.Generic;
-using EntityFrameworkCore.Projectables;
-
-namespace Foo {
-    public abstract class Foo {
-        [Projectable]
-        public abstract int Id();
-    }
-
-    public class Bar : Foo {
-        override public int Id() => 2;
-    }
-
-    public class Baz : Bar {
-        override public int Id() => 3;
-    }
-}
-");
-
-        var result = RunGenerator(compilation);
-
-        Assert.Empty(result.Diagnostics);
-        Assert.Single(result.GeneratedTrees);
-
-        return Verifier.Verify(result.GeneratedTrees[0].ToString());
-    }
-
-    [Fact]
-    public void HierarchyAbstractWithNoDerived()
-    {
-        var compilation = CreateCompilation(@"
-using System;
-using System.Linq;
-using System.Collections.Generic;
-using EntityFrameworkCore.Projectables;
-
-namespace Foo {
-    public abstract class Foo {
-        [Projectable]
-        public abstract int Id();
-    }
-}
-");
-
-        var result = RunGenerator(compilation);
-
-        var diag = Assert.Single(result.Diagnostics);
-        Assert.Equal("EFP0006", diag.Id);
-        Assert.Equal(DiagnosticSeverity.Error, diag.Severity);
-    }
-
-    [Fact]
-    public void HierarchyAbstractWithNoDerivedOverwritten()
-    {
-        var compilation = CreateCompilation(@"
-using System;
-using System.Linq;
-using System.Collections.Generic;
-using EntityFrameworkCore.Projectables;
-
-namespace Foo {
-    public abstract class Foo {
-        [Projectable]
-        public abstract int Id();
-    }
-
-    public abstract class Bar : Foo { }
-}
-");
-
-        var result = RunGenerator(compilation);
-
-        var diag = Assert.Single(result.Diagnostics);
-        Assert.Equal("EFP0006", diag.Id);
-        Assert.Equal(DiagnosticSeverity.Error, diag.Severity);
-    }
-
-    [Fact]
-    public Task HierarchyBase()
-    {
-        var compilation = CreateCompilation(@"
-using System;
-using System.Linq;
-using System.Collections.Generic;
-using EntityFrameworkCore.Projectables;
-
-namespace Foo {
-    public class Foo {
-        [Projectable]
-        public virtual int Id() => 1;
-    }
-
-    public class Bar : Foo {
-        [Projectable]
-        override public int Id() => true ? 2 : base.Id();
-    }
-}
-");
-
-        var result = RunGenerator(compilation);
-
-        Assert.Empty(result.Diagnostics);
-        Assert.Equal(3, result.GeneratedTrees.Length);
-
-        return Verifier.Verify(result.GeneratedTrees.OrderBy(t => t.FilePath).Select(t => t.ToString()));
+        Assert.Empty(result.GeneratedTrees);
     }
 }
