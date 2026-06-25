@@ -19,8 +19,14 @@ namespace EntityFrameworkCore.Projectables.Services
         private IQueryProvider? _currentQueryProvider;
         private bool _disableRootRewrite = false;
         private readonly bool _trackingByDefault;
-        private readonly bool _polymorphicDispatchGlobal;
         private IEntityType? _entityType;
+
+        private readonly static bool _polymorphicDispatchGlobal = ((bool?)AppDomain.CurrentDomain.GetAssemblies()
+            .SelectMany(a => a.GetTypes())
+            .FirstOrDefault(t => t.FullName == "EntityFrameworkCore.Projectables.Generated.ProjectableGlobalOptions")
+            ?.GetProperty("PolymorphicDispatch", BindingFlags.Public | BindingFlags.Static)
+            ?.GetValue(null))
+                ?? false;
 
         // Extract MethodInfo via expression trees (trim-safe; computed once per AppDomain)
         private readonly static MethodInfo _select =
@@ -43,7 +49,6 @@ namespace EntityFrameworkCore.Projectables.Services
         {
             _trackingByDefault = trackByDefault;
             _resolver = projectionExpressionResolver;
-            _polymorphicDispatchGlobal = false; // DEV: retrieve from global config
         }
 
         bool TryGetReflectedExpression(MemberInfo memberInfo, [NotNullWhen(true)] out LambdaExpression? reflectedExpression)
