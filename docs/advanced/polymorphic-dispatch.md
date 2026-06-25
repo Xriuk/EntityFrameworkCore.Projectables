@@ -16,7 +16,7 @@ public class Bar : Foo{
 }
 
 
-var bar = new Bar();
+Foo bar = new Bar();
 bar.Name(); // "Bar"
 ```
 
