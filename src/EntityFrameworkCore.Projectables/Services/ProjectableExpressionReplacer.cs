@@ -21,8 +21,17 @@ namespace EntityFrameworkCore.Projectables.Services
         private readonly bool _trackingByDefault;
         private IEntityType? _entityType;
 
-        private readonly static bool _polymorphicDispatchGlobal = ((bool?)AppDomain.CurrentDomain.GetAssemblies()
-            .SelectMany(a => a.GetTypes())
+        internal readonly static bool _polymorphicDispatchGlobal = ((bool?)AppDomain.CurrentDomain.GetAssemblies()
+            .SelectMany(a => {
+                try
+                {
+                    return a.GetTypes();
+                }
+                catch (ReflectionTypeLoadException)
+                {
+                    return [];
+                }
+            })
             .FirstOrDefault(t => t.FullName == "EntityFrameworkCore.Projectables.Generated.ProjectableGlobalOptions")
             ?.GetProperty("PolymorphicDispatch", BindingFlags.Public | BindingFlags.Static)
             ?.GetValue(null))
@@ -301,7 +310,7 @@ namespace EntityFrameworkCore.Projectables.Services
             return base.VisitMethodCall(node);
         }
 
-        private static bool IsPolymorphic(MethodInfo? method)
+        internal static bool IsPolymorphic(MethodInfo? method)
         {
             return method != null && (method.IsAbstract || method.IsVirtual || method.GetBaseDefinition() != method);
         }
@@ -611,7 +620,7 @@ namespace EntityFrameworkCore.Projectables.Services
 
         private Expression _GetAccessor(PropertyInfo property, ParameterExpression para)
         {
-            var lambda = _resolver.FindGeneratedExpression(property);
+            var lambda = _resolver.FindGeneratedExpression(property)!;
             _expressionArgumentReplacer.ParameterArgumentMapping.Add(lambda.Parameters[0], para);
             var updatedBody = _expressionArgumentReplacer.Visit(lambda.Body);
             _expressionArgumentReplacer.ParameterArgumentMapping.Clear();

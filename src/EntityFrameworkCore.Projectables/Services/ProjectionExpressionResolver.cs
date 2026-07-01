@@ -74,12 +74,15 @@ namespace EntityFrameworkCore.Projectables.Services
             return ReferenceEquals(registry, _nullRegistry) ? null : registry;
         }
 
-        public LambdaExpression FindGeneratedExpression(MemberInfo projectableMemberInfo,
+        public LambdaExpression? FindGeneratedExpression(MemberInfo projectableMemberInfo,
             ProjectableAttribute? projectableAttribute = null)
-            => _expressionCache.GetOrAdd(projectableMemberInfo, static (mi, a) => ResolveExpressionCore(mi, a),
+        {
+            var expr = _expressionCache.GetOrAdd(projectableMemberInfo, static (mi, a) => ResolveExpressionCore(mi, a) ?? _reflectionNullSentinel,
                 projectableAttribute);
+            return expr == _reflectionNullSentinel ? null : expr;
+        }
 
-        private static LambdaExpression ResolveExpressionCore(MemberInfo projectableMemberInfo,
+        private static LambdaExpression? ResolveExpressionCore(MemberInfo projectableMemberInfo,
             ProjectableAttribute? projectableAttribute)
         {
             projectableAttribute ??= projectableMemberInfo.GetCustomAttribute<ProjectableAttribute>()
@@ -95,6 +98,12 @@ namespace EntityFrameworkCore.Projectables.Services
             if (expression is not null)
             {
                 return expression;
+            }
+
+            if(projectableMemberInfo is MethodInfo m ? ProjectableExpressionReplacer.IsPolymorphic(m) :
+                projectableMemberInfo is PropertyInfo p && p.GetGetMethod() is MethodInfo m2 && ProjectableExpressionReplacer.IsPolymorphic(m2))
+            {
+                return null;
             }
 
             var declaringType = projectableMemberInfo.DeclaringType ?? throw new InvalidOperationException("Expected a valid type here");
