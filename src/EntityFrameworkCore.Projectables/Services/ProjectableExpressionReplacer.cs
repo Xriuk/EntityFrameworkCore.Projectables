@@ -215,13 +215,31 @@ namespace EntityFrameworkCore.Projectables.Services
                         Expression body;
                         if (reflectedExpression != null)
                         {
+                            for (var parameterIndex = 0; parameterIndex < reflectedExpression.Parameters.Count; parameterIndex++)
+                            {
+                                var parameterExpression = reflectedExpression.Parameters[parameterIndex];
+                                var mappedArgumentExpression = (parameterIndex, node.Object) switch {
+                                    (0, not null) => node.Object,
+                                    (_, not null) => node.Arguments[parameterIndex - 1],
+                                    (_, null) => node.Arguments.Count > parameterIndex ? node.Arguments[parameterIndex] : null
+                                };
+
+                                if (mappedArgumentExpression is not null)
+                                {
+                                    _expressionArgumentReplacer.ParameterArgumentMapping.Add(parameterExpression, mappedArgumentExpression);
+                                }
+                            }
+
+                            var updatedBody = _expressionArgumentReplacer.Visit(reflectedExpression.Body);
+                            _expressionArgumentReplacer.ParameterArgumentMapping.Clear();
+
                             // @this is Type1 ? ((Type1)@this).Method(...) : ...
                             // ... ? ... :
                             // @this is TypeN ? ((TypeN)@this).Method(...) : ...
                             // virtualImplementation
                             body = derivedTypes.AsEnumerable()
                                 .Reverse()
-                                .Aggregate(reflectedExpression.Body, AggregateTypes);
+                                .Aggregate(updatedBody, AggregateTypes);
                         }
                         else
                         {
@@ -263,16 +281,10 @@ namespace EntityFrameworkCore.Projectables.Services
 
                         if (mappedArgumentExpression is not null)
                         {
-                            // If the type is different in case of a base call we re-cast it
-                            if (isBase && mappedArgumentExpression.Type != parameterExpression.Type &&
-                                mappedArgumentExpression.Type.IsAssignableTo(parameterExpression.Type) &&
-                                mappedArgumentExpression is UnaryExpression u2)
+                            // If base we can remove the cast
+                            if (isBase && mappedArgumentExpression is UnaryExpression u2)
                             {
-                                var unwrapped = UnwrapUnaryConvert(u2);
-                                if (unwrapped != u2)
-                                {
-                                    mappedArgumentExpression = Expression.Convert(unwrapped, parameterExpression.Type);
-                                }
+                                mappedArgumentExpression = UnwrapUnaryConvert(u2);
                             }
 
                             _expressionArgumentReplacer.ParameterArgumentMapping.Add(parameterExpression, mappedArgumentExpression);
@@ -327,8 +339,18 @@ namespace EntityFrameworkCore.Projectables.Services
             }
 
             // Retrieve all the derived types which have an override of the member
+            // DEV: maybe cache?
             var types = AppDomain.CurrentDomain.GetAssemblies()
-                .SelectMany(a => a.GetTypes())
+                .SelectMany(a => {
+                    try
+                    {
+                        return a.GetTypes();
+                    }
+                    catch (ReflectionTypeLoadException)
+                    {
+                        return [];
+                    }
+                })
                 .Where(t => t != baseType && t.IsAssignableTo(baseType) && memberGetter.Invoke(t) != null)
                 .OrderByDescending(GetDepth) // More specific types first
                 .ThenBy(t => t.Name)
@@ -510,16 +532,10 @@ namespace EntityFrameworkCore.Projectables.Services
                 {
                     if (nodeExpression is not null)
                     {
-                        // If the type is different in case of a base call we re-cast it
-                        if (isBase && nodeExpression.Type != reflectedExpression.Parameters[0].Type &&
-                            nodeExpression.Type.IsAssignableTo(reflectedExpression.Parameters[0].Type) &&
-                            nodeExpression is UnaryExpression u2)
+                        // If base we can remove the cast
+                        if (isBase && nodeExpression is UnaryExpression u2)
                         {
-                            var unwrapped = UnwrapUnaryConvert(u2);
-                            if (unwrapped != u2)
-                            {
-                                nodeExpression = Expression.Convert(unwrapped, reflectedExpression.Parameters[0].Type);
-                            }
+                            nodeExpression = UnwrapUnaryConvert(u2);
                         }
 
                         _expressionArgumentReplacer.ParameterArgumentMapping.Add(reflectedExpression.Parameters[0], nodeExpression);
